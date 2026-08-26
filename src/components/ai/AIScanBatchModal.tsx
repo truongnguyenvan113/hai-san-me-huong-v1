@@ -159,23 +159,29 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
       setTimeout(() => setAnalyzingStep('Đang phân loại các món hải sản & quy cách size...'), 1400);
       setTimeout(() => setAnalyzingStep('Đang tổng hợp thành đợt hàng và đơn chi tiết...'), 2200);
 
-      const response = await fetch('/api/ai/parse-orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: imgToUse || undefined,
-          imageMimeType: imageMimeType,
-          rawText: textToUse || undefined,
-          existingProducts: products.map((p) => ({
-            product_name: p.product_name,
-            unit: p.unit,
-            default_price: p.default_price,
-          })),
-          condoName: storeSettings.condo_name,
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetch('/api/ai/parse-orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: imgToUse || undefined,
+            imageMimeType: imageMimeType,
+            rawText: textToUse || undefined,
+            existingProducts: products.map((p) => ({
+              product_name: p.product_name,
+              unit: p.unit,
+              default_price: p.default_price,
+            })),
+            condoName: storeSettings.condo_name,
+          }),
+        });
+      } catch (netErr: any) {
+        console.error('Fetch error to /api/ai/parse-orders:', netErr);
+        throw new Error('Không thể kết nối đến máy chủ AI (Lỗi mạng). Vui lòng kiểm tra kết nối mạng và thử lại.');
+      }
 
-      const resJson = await response.json();
+      const resJson = await response.json().catch(() => ({}));
 
       if (!response.ok || !resJson.success) {
         throw new Error(resJson.error || 'Không thể phân tích dữ liệu hình ảnh ghi chú');

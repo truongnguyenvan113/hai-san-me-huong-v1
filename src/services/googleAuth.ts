@@ -51,21 +51,7 @@ export const initAuth = (
       }
       if (cachedAccessToken) {
         if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (isAutoReconnectEnabled()) {
-        // Attempt silent re-authentication if auto-reconnect was previously enabled
-        try {
-          console.info('Đang tự động khôi phục phiên Google Workspace...');
-          const result = await refreshGoogleSession();
-          if (result && onAuthSuccess) {
-            onAuthSuccess(result.user, result.accessToken);
-          } else if (onAuthFailure) {
-            onAuthFailure();
-          }
-        } catch {
-          if (onAuthFailure) onAuthFailure();
-        }
-      } else if (!isSigningIn) {
-        // If user is logged in but memory token is missing and auto reconnect disabled
+      } else {
         if (onAuthFailure) onAuthFailure();
       }
     } else {
