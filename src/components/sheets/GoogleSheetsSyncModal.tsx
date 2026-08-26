@@ -23,6 +23,7 @@ import {
   Globe,
   Key,
   HelpCircle,
+  Search,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
@@ -36,6 +37,7 @@ import {
   createSeafoodSpreadsheet,
   syncAllToGoogleSheets,
   pullAndRestoreFromGoogleSheets,
+  searchSpreadsheetsOnDrive,
   SyncStats,
   RestoreStats,
   SHEET_NAMES,
@@ -84,12 +86,29 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   const [showConfirmPull, setShowConfirmPull] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
+  // Drive search state
+  const [driveSheets, setDriveSheets] = useState<Array<{ id: string; name: string; url: string; modifiedTime?: string }>>([]);
+  const [isSearchingDrive, setIsSearchingDrive] = useState(false);
+
   // Unauthorized Domain specific state & fallback
   const [showUnauthorizedGuide, setShowUnauthorizedGuide] = useState(false);
   const [currentHostname, setCurrentHostname] = useState('');
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
   const [tokenInput, setTokenInput] = useState('');
+
+  // Function to search sheets on Drive
+  const handleSearchDrive = async () => {
+    setIsSearchingDrive(true);
+    try {
+      const results = await searchSpreadsheetsOnDrive('Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư');
+      setDriveSheets(results);
+    } catch (err) {
+      console.warn('Drive search error:', err);
+    } finally {
+      setIsSearchingDrive(false);
+    }
+  };
 
   // Initialize auth listener
   useEffect(() => {
@@ -100,6 +119,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       (user, _token) => {
         setCurrentUser(user);
         setIsAuthLoading(false);
+        handleSearchDrive();
       },
       () => {
         setIsAuthLoading(false);
@@ -125,7 +145,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
           message: `Đã kết nối tài khoản Google: ${res.user.email}`,
         });
 
-        // Trigger first automatic sync / creation
+        await handleSearchDrive();
         triggerSyncNow();
       }
     } catch (err: any) {
@@ -160,7 +180,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     }
   };
 
-  const handleApplyManualToken = () => {
+  const handleApplyManualToken = async () => {
     if (!tokenInput.trim()) {
       addToast({
         type: 'ERROR',
@@ -198,7 +218,18 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       title: 'Đã nạp Access Token',
       message: 'Đã thiết lập mã xác thực Google Sheets thành công. Sẵn sàng đồng bộ!',
     });
+    await handleSearchDrive();
     triggerSyncNow();
+  };
+
+  const handleSelectDriveSheet = (sheet: { id: string; url: string; name: string }) => {
+    setSpreadsheetInfo(sheet.id, sheet.url);
+    addToast({
+      type: 'SUCCESS',
+      title: 'Đã kết nối bảng tính có sẵn',
+      message: `Đã liên kết với "${sheet.name}". Dữ liệu được đồng bộ liên tục!`,
+    });
+    executeSync(sheet.id);
   };
 
   const copyDomainToClipboard = (textToCopy: string) => {
@@ -754,6 +785,52 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
               </div>
             ) : (
               <div className="space-y-3">
+                {/* Found Existing Sheets on Google Drive */}
+                {currentUser && driveSheets.length > 0 && (
+                  <div className="p-3.5 bg-teal-50/80 border border-teal-200 rounded-2xl space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-teal-950 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-teal-700" /> Tìm Thấy {driveSheets.length} Bảng Tính Có Sẵn Trên Google Drive
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleSearchDrive}
+                        disabled={isSearchingDrive}
+                        className="text-[11px] text-teal-700 hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isSearchingDrive ? 'animate-spin' : ''}`} /> Làm mới
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-teal-800 leading-relaxed">
+                      Nhấn <b>"Kết Nối Ngay"</b> để sử dụng tiếp dữ liệu từ bảng tính cũ mà không cần tạo mới:
+                    </p>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {driveSheets.map((sheet) => (
+                        <div
+                          key={sheet.id}
+                          className="p-2.5 bg-white rounded-xl border border-teal-100 flex items-center justify-between gap-2 shadow-2xs hover:border-teal-300 transition-colors"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-bold text-slate-900 truncate">
+                              {sheet.name}
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono truncate">
+                              ID: {sheet.id}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectDriveSheet(sheet)}
+                            className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-lg shrink-0 transition-colors cursor-pointer"
+                          >
+                            🔗 Kết Nối Ngay
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     type="button"

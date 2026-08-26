@@ -70,13 +70,51 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}) {
   return res.json();
 }
 
+// Helper: Search for existing seafood spreadsheet in Google Drive to prevent duplicates
+export async function searchSpreadsheetsOnDrive(
+  searchQuery: string = 'Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư'
+): Promise<Array<{ id: string; name: string; url: string; modifiedTime?: string }>> {
+  const token = await getAccessToken();
+  if (!token) return [];
+
+  try {
+    const q = `mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains '${searchQuery.replace(/'/g, "\\'")}'`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,webViewLink)&orderBy=modifiedTime desc&pageSize=10`;
+    
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!res.ok) {
+      console.warn('Drive API list files status:', res.status);
+      return [];
+    }
+
+    const data = await res.json();
+    if (data && Array.isArray(data.files)) {
+      return data.files.map((f: any) => ({
+        id: f.id,
+        name: f.name,
+        url: f.webViewLink || `https://docs.google.com/spreadsheets/d/${f.id}/edit`,
+        modifiedTime: f.modifiedTime,
+      }));
+    }
+    return [];
+  } catch (err) {
+    console.warn('Cannot search Google Drive for existing sheets:', err);
+    return [];
+  }
+}
+
 // 1. Create a new Spreadsheet dedicated for Seafood Management (7 Tabs)
 export async function createSeafoodSpreadsheet(
   title: string = 'Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư'
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
   const requestBody = {
     properties: {
-      title: `${title} (${new Date().toLocaleDateString('vi-VN')})`,
+      title: `${title}`,
     },
     sheets: [
       { properties: { title: SHEET_NAMES.ORDERS, gridProperties: { frozenRowCount: 1 } } },
@@ -494,7 +532,7 @@ export async function syncAllToGoogleSheets(
   };
 }
 
-// 5. Automated Sync Engine (creates sheet if missing, updates all 7 tabs)
+// 5. Automated Sync Engine (finds existing spreadsheet on Drive or creates if missing, updates all 7 tabs)
 export async function autoSyncAll(
   orders: Order[],
   batches: Batch[],
@@ -511,7 +549,23 @@ export async function autoSyncAll(
   let spreadsheetId = localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
   let spreadsheetUrl = localStorage.getItem('seafood_sheets_spreadsheet_url') || '';
 
-  // If no spreadsheet exists yet, auto-create one
+  // If no spreadsheet ID in localStorage (e.g. running on new local/domain), first try searching Google Drive
+  if (!spreadsheetId) {
+    try {
+      const searchResults = await searchSpreadsheetsOnDrive(options?.title || 'Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư');
+      if (searchResults && searchResults.length > 0) {
+        // Reuse the existing most recently modified spreadsheet on user's Google Drive
+        spreadsheetId = searchResults[0].id;
+        spreadsheetUrl = searchResults[0].url;
+        localStorage.setItem('seafood_sheets_spreadsheet_id', spreadsheetId);
+        localStorage.setItem('seafood_sheets_spreadsheet_url', spreadsheetUrl);
+      }
+    } catch (err) {
+      console.warn('Could not search Drive for existing sheet, will check creation fallback:', err);
+    }
+  }
+
+  // If still no spreadsheet found, create one
   if (!spreadsheetId) {
     const created = await createSeafoodSpreadsheet(
       options?.title || 'Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư'
