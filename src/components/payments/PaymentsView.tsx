@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { PaymentTransaction, Order } from '../../types';
-import { formatCurrency, formatDate, getVietQRUrl, formatVietQRMemo } from '../../utils/formatters';
+import {
+  formatCurrency,
+  formatDate,
+  formatVietQRMemo,
+  getActiveBankAccountInfo,
+} from '../../utils/formatters';
+import { VietQRDisplay } from '../common/VietQRDisplay';
 import {
   DollarSign,
   QrCode,
@@ -291,26 +297,26 @@ export const PaymentsView: React.FC = () => {
               </div>
 
               {/* VietQR Quick Scan */}
-              {payMethod === 'QR' && storeSettings.bank_account && (
+              {payMethod === 'QR' && (
                 <div className="bg-teal-50/70 p-4 rounded-xl border border-teal-200 text-center">
                   <div className="text-xs font-bold text-teal-950 mb-2">
                     Mã VietQR động tự động điền số tiền {formatCurrency(payAmount)}
                   </div>
-                  <img
-                    src={getVietQRUrl(
-                      storeSettings.bank_name,
-                      storeSettings.bank_account,
-                      storeSettings.bank_owner,
-                      payAmount,
-                      formatVietQRMemo(selectedOrderForPay.customer_room, selectedOrderForPay.customer_building)
-                    )}
-                    alt="VietQR Payment"
-                    className="w-44 h-44 mx-auto bg-white p-2 rounded-xl shadow-xs border border-slate-200"
-                  />
-                  <div className="text-[11px] text-slate-600 mt-2 font-mono">
-                    {storeSettings.bank_name} - {storeSettings.bank_account} ({storeSettings.bank_owner})
+                  <div className="flex justify-center">
+                    <VietQRDisplay
+                      bin={getActiveBankAccountInfo(storeSettings).bin}
+                      accountNumber={getActiveBankAccountInfo(storeSettings).accountNumber}
+                      accountName={getActiveBankAccountInfo(storeSettings).accountName}
+                      amount={payAmount}
+                      memo={formatVietQRMemo(selectedOrderForPay.customer_room, selectedOrderForPay.customer_building)}
+                      template={(storeSettings.bank_qr_template as any) || 'compact2'}
+                      sizeClass="w-44 h-44"
+                    />
                   </div>
-                  <div className="text-[11px] text-teal-800 font-bold mt-1">
+                  <div className="text-[11px] text-slate-700 mt-2 font-mono font-bold">
+                    {getActiveBankAccountInfo(storeSettings).bankShortName} - STK: {getActiveBankAccountInfo(storeSettings).accountNumber} ({getActiveBankAccountInfo(storeSettings).accountName})
+                  </div>
+                  <div className="text-[11px] text-teal-900 font-bold mt-1 bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200 inline-block">
                     Nội dung: {formatVietQRMemo(selectedOrderForPay.customer_room, selectedOrderForPay.customer_building)}
                   </div>
                 </div>

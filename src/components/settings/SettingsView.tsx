@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { StoreSettings, BackupSnapshot } from '../../types';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { BackupCompareModal } from './BackupCompareModal';
+import { VietQRDisplay } from '../common/VietQRDisplay';
 import {
   Settings,
   Store,
@@ -315,15 +316,21 @@ export const SettingsView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">Số tài khoản NH 1</label>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  Số tài khoản NH 1 <span className="text-emerald-700 font-normal">(Giữ nguyên số 0 đầu)</span>
+                </label>
                 <input
                   type="text"
+                  inputMode="text"
                   required
                   value={formData.bank_account}
-                  onChange={(e) => setFormData({ ...formData, bank_account: e.target.value })}
-                  placeholder="Nhập số tài khoản..."
+                  onChange={(e) => setFormData({ ...formData, bank_account: e.target.value.replace(/\s+/g, '') })}
+                  placeholder="VD: 0916988982 hoặc 9988..."
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono font-bold text-slate-900 focus:ring-2 focus:ring-teal-700"
                 />
+                <span className="text-[10px] text-slate-500 mt-0.5 block">
+                  💡 Nhập tự do số 0 ở đầu, hệ thống bảo lưu chính xác
+                </span>
               </div>
 
               <div>
@@ -364,14 +371,20 @@ export const SettingsView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">Số tài khoản NH 2</label>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                  Số tài khoản NH 2 <span className="text-emerald-700 font-normal">(Giữ nguyên số 0 đầu)</span>
+                </label>
                 <input
                   type="text"
+                  inputMode="text"
                   value={formData.bank_account_2 || ''}
-                  onChange={(e) => setFormData({ ...formData, bank_account_2: e.target.value })}
-                  placeholder="Nhập số tài khoản phụ..."
+                  onChange={(e) => setFormData({ ...formData, bank_account_2: e.target.value.replace(/\s+/g, '') })}
+                  placeholder="VD: 0381000... hoặc 8899..."
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg font-mono font-bold text-slate-900 focus:ring-2 focus:ring-teal-700"
                 />
+                <span className="text-[10px] text-slate-500 mt-0.5 block">
+                  💡 Nhập tự do số 0 ở đầu, hệ thống bảo lưu chính xác
+                </span>
               </div>
 
               <div>
@@ -390,8 +403,13 @@ export const SettingsView: React.FC = () => {
 
         {/* Section 3: VietQR Display & Size Customization */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex items-center gap-2 text-teal-900 font-black text-base pb-3 border-b border-slate-100">
-            <QrCode className="w-5 h-5 text-teal-800" /> 3. Tùy Chọn Kích Thước & Hiển Thị Mã VietQR Trên Phiếu In A4
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2 text-teal-900 font-black text-base">
+              <QrCode className="w-5 h-5 text-teal-800" /> 3. Tùy Chọn Kích Thước & Hiển Thị Mã VietQR Trên Phiếu In A4
+            </div>
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Hỗ trợ 100% Offline
+            </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
@@ -423,6 +441,49 @@ export const SettingsView: React.FC = () => {
                 <option value="compact">compact (Gọn nhẹ)</option>
                 <option value="qr_only">qr_only (Chỉ mã QR thuần)</option>
               </select>
+            </div>
+          </div>
+
+          {/* LIVE VIETQR PREVIEW & SCAN TESTER */}
+          <div className="mt-4 p-4 bg-teal-50/60 rounded-xl border border-teal-200/80">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-black text-teal-950 uppercase tracking-tight flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-amber-600" />
+                Xem Trước & Quét Thử Mã VietQR (Bảo Lưu Số 0 & Hoạt Động Cả Khi Mất Mạng)
+              </span>
+              <span className="text-[11px] text-teal-800 font-semibold">
+                Đang hiển thị: {formData.active_bank_account === 'BANK_2' ? 'Tài khoản 2 (Phụ)' : 'Tài khoản 1 (Chính)'}
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-3 rounded-lg border border-teal-100 shadow-2xs">
+              <div className="shrink-0 bg-white p-1 rounded-md border border-slate-200 shadow-2xs">
+                <VietQRDisplay
+                  bin={formData.active_bank_account === 'BANK_2' ? formData.bank_bin_2 || '970418' : formData.bank_bin || '970425'}
+                  accountNumber={formData.active_bank_account === 'BANK_2' ? formData.bank_account_2 || '' : formData.bank_account || ''}
+                  accountName={formData.active_bank_account === 'BANK_2' ? formData.bank_account_name_2 || formData.bank_owner : formData.bank_owner}
+                  amount={500000}
+                  memo="S203 P1204 HAISAN"
+                  template={(formData.bank_qr_template as any) || 'compact2'}
+                  sizeClass="w-36 h-36"
+                  showCaption={true}
+                />
+              </div>
+
+              <div className="flex-1 text-xs space-y-1.5 text-slate-800">
+                <div className="font-bold text-teal-900 text-sm">
+                  {formData.active_bank_account === 'BANK_2' ? formData.bank_name_2 : formData.bank_name}
+                </div>
+                <div className="font-mono font-black text-slate-900 text-sm bg-slate-100 px-2 py-0.5 rounded inline-block">
+                  STK: {formData.active_bank_account === 'BANK_2' ? formData.bank_account_2 || '(Chưa nhập)' : formData.bank_account || '(Chưa nhập)'}
+                </div>
+                <div className="text-slate-600">
+                  Chủ TK: <span className="font-bold text-slate-900 uppercase">{formData.active_bank_account === 'BANK_2' ? formData.bank_account_name_2 || formData.bank_owner : formData.bank_owner || '(Chưa nhập)'}</span>
+                </div>
+                <div className="text-[11px] text-emerald-800 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
+                  ⚡ <strong>Cơ chế Offline độc quyền:</strong> Mã QR chuẩn Napas EMVCo được sinh trực tiếp trên máy bằng thuật toán nội bộ, ngay cả khi mất mạng internet toàn bộ phiếu in A4 và màn hình thu tiền vẫn hiển thị QR sắc nét để cư dân quét chuyển khoản 100% bình thường.
+                </div>
+              </div>
             </div>
           </div>
 

@@ -209,6 +209,22 @@ const translateDeliveryStatus = (status: string) => {
   return map[status] || status;
 };
 
+// Helper to force Google Sheets to preserve leading zeros in text fields (e.g. '0916988982', '0381000...')
+function preserveLeadingZero(value: any): string {
+  if (value === null || value === undefined) return '';
+  const str = String(value).trim();
+  if (/^0\d+$/.test(str)) {
+    return `'${str}`;
+  }
+  return str;
+}
+
+// Clean string imported from Google Sheets (strip leading quote and trim)
+function cleanSheetString(value: any): string {
+  if (value === null || value === undefined) return '';
+  return String(value).trim().replace(/^'/, '');
+}
+
 // 3. Prepare data rows for each sheet tab (Including Tab 7: Settings)
 export function prepareSheetData(
   orders: Order[],
@@ -253,7 +269,7 @@ export function prepareSheetData(
     return [
       o.order_code,
       o.customer_name,
-      o.customer_phone || '',
+      preserveLeadingZero(o.customer_phone),
       o.customer_building || '',
       o.customer_room || '',
       o.batch_name || '',
@@ -343,7 +359,7 @@ export function prepareSheetData(
     return [
       c.customer_code,
       c.name,
-      c.phone || '',
+      preserveLeadingZero(c.phone),
       c.building || '',
       c.room || '',
       c.address || '',
@@ -441,7 +457,7 @@ export function prepareSheetData(
     .map((o) => [
       `${o.customer_building ? o.customer_building + ' - ' : ''}P.${o.customer_room}`,
       o.customer_name,
-      o.customer_phone || '',
+      preserveLeadingZero(o.customer_phone),
       o.order_code,
       o.batch_name,
       o.delivery_date || '',
@@ -458,16 +474,16 @@ export function prepareSheetData(
   const settingsRows = [
     ['STORE_NAME', settings.store_name || '', 'Tên cửa hàng hải sản hiển thị trên phiếu in & tiêu đề'],
     ['OWNER_NAME', settings.owner_name || '', 'Tên chủ shop / cư dân đại diện'],
-    ['PHONE', settings.phone || '', 'Số điện thoại di động chính'],
-    ['HOTLINE', settings.hotline || settings.phone || '', 'Hotline liên hệ in nổi bật trên phiếu A4'],
+    ['PHONE', preserveLeadingZero(settings.phone), 'Số điện thoại di động chính'],
+    ['HOTLINE', preserveLeadingZero(settings.hotline || settings.phone), 'Hotline liên hệ in nổi bật trên phiếu A4'],
     ['CONDO_NAME', settings.condo_name || '', 'Tên khu chung cư phục vụ gom đơn'],
     ['ADDRESS', settings.address || '', 'Địa chỉ tập kết & giao nhận hải sản'],
     ['BANK_1_NAME', settings.bank_name || 'ABBANK', 'Ngân hàng 1 (Tài khoản chính, VD: ABBANK, BIDV, Vietcombank)'],
-    ['BANK_1_ACCOUNT', settings.bank_account || '', 'Số tài khoản Ngân hàng 1'],
+    ['BANK_1_ACCOUNT', preserveLeadingZero(settings.bank_account), 'Số tài khoản Ngân hàng 1 (Bảo lưu nguyên vẹn số 0 đầu)'],
     ['BANK_1_ACCOUNT_NAME', settings.bank_account_name || settings.bank_owner || '', 'Tên chủ tài khoản Ngân hàng 1'],
     ['BANK_1_BIN', settings.bank_bin || '970425', 'Mã BIN VietQR Ngân hàng 1'],
     ['BANK_2_NAME', settings.bank_name_2 || 'BIDV', 'Ngân hàng 2 (Tài khoản phụ)'],
-    ['BANK_2_ACCOUNT', settings.bank_account_2 || '', 'Số tài khoản Ngân hàng 2'],
+    ['BANK_2_ACCOUNT', preserveLeadingZero(settings.bank_account_2), 'Số tài khoản Ngân hàng 2 (Bảo lưu nguyên vẹn số 0 đầu)'],
     ['BANK_2_ACCOUNT_NAME', settings.bank_account_name_2 || settings.bank_account_name || '', 'Tên chủ tài khoản Ngân hàng 2'],
     ['BANK_2_BIN', settings.bank_bin_2 || '970418', 'Mã BIN VietQR Ngân hàng 2'],
     ['ACTIVE_BANK_ACCOUNT', settings.active_bank_account || 'BANK_1', 'Tài khoản nhận tiền mặc định được chọn (BANK_1 hoặc BANK_2)'],
@@ -703,26 +719,26 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
 
     restoredSettings = {
       ...currentSettings,
-      store_name: configMap['STORE_NAME'] || currentSettings.store_name,
-      owner_name: configMap['OWNER_NAME'] || currentSettings.owner_name,
-      phone: configMap['PHONE'] || currentSettings.phone,
-      hotline: configMap['HOTLINE'] || currentSettings.hotline,
-      condo_name: configMap['CONDO_NAME'] || currentSettings.condo_name,
-      address: configMap['ADDRESS'] || currentSettings.address,
-      bank_name: configMap['BANK_1_NAME'] || currentSettings.bank_name,
-      bank_account: configMap['BANK_1_ACCOUNT'] || currentSettings.bank_account,
-      bank_account_name: configMap['BANK_1_ACCOUNT_NAME'] || currentSettings.bank_account_name,
-      bank_bin: configMap['BANK_1_BIN'] || currentSettings.bank_bin,
-      bank_name_2: configMap['BANK_2_NAME'] || currentSettings.bank_name_2,
-      bank_account_2: configMap['BANK_2_ACCOUNT'] || currentSettings.bank_account_2,
-      bank_account_name_2: configMap['BANK_2_ACCOUNT_NAME'] || currentSettings.bank_account_name_2,
-      bank_bin_2: configMap['BANK_2_BIN'] || currentSettings.bank_bin_2,
-      active_bank_account: (configMap['ACTIVE_BANK_ACCOUNT'] as any) || currentSettings.active_bank_account || 'BANK_1',
-      bank_qr_template: (configMap['BANK_QR_TEMPLATE'] as any) || currentSettings.bank_qr_template || 'compact2',
-      qr_size: (configMap['QR_SIZE'] as any) || currentSettings.qr_size || 'large',
+      store_name: cleanSheetString(configMap['STORE_NAME']) || currentSettings.store_name,
+      owner_name: cleanSheetString(configMap['OWNER_NAME']) || currentSettings.owner_name,
+      phone: cleanSheetString(configMap['PHONE']) || currentSettings.phone,
+      hotline: cleanSheetString(configMap['HOTLINE']) || currentSettings.hotline,
+      condo_name: cleanSheetString(configMap['CONDO_NAME']) || currentSettings.condo_name,
+      address: cleanSheetString(configMap['ADDRESS']) || currentSettings.address,
+      bank_name: cleanSheetString(configMap['BANK_1_NAME']) || currentSettings.bank_name,
+      bank_account: cleanSheetString(configMap['BANK_1_ACCOUNT']) || currentSettings.bank_account,
+      bank_account_name: cleanSheetString(configMap['BANK_1_ACCOUNT_NAME']) || currentSettings.bank_account_name,
+      bank_bin: cleanSheetString(configMap['BANK_1_BIN']) || currentSettings.bank_bin,
+      bank_name_2: cleanSheetString(configMap['BANK_2_NAME']) || currentSettings.bank_name_2,
+      bank_account_2: cleanSheetString(configMap['BANK_2_ACCOUNT']) || currentSettings.bank_account_2,
+      bank_account_name_2: cleanSheetString(configMap['BANK_2_ACCOUNT_NAME']) || currentSettings.bank_account_name_2,
+      bank_bin_2: cleanSheetString(configMap['BANK_2_BIN']) || currentSettings.bank_bin_2,
+      active_bank_account: (cleanSheetString(configMap['ACTIVE_BANK_ACCOUNT']) as any) || currentSettings.active_bank_account || 'BANK_1',
+      bank_qr_template: (cleanSheetString(configMap['BANK_QR_TEMPLATE']) as any) || currentSettings.bank_qr_template || 'compact2',
+      qr_size: (cleanSheetString(configMap['QR_SIZE']) as any) || currentSettings.qr_size || 'large',
       show_vietqr: configMap['SHOW_VIETQR'] !== undefined ? configMap['SHOW_VIETQR'] === 'true' : currentSettings.show_vietqr,
-      invoice_footer_note: configMap['INVOICE_FOOTER_NOTE'] || currentSettings.invoice_footer_note,
-      slogan: configMap['SLOGAN'] || currentSettings.slogan,
+      invoice_footer_note: cleanSheetString(configMap['INVOICE_FOOTER_NOTE']) || currentSettings.invoice_footer_note,
+      slogan: cleanSheetString(configMap['SLOGAN']) || currentSettings.slogan,
       default_shipping_fee: configMap['DEFAULT_SHIPPING_FEE'] ? parseFloat(configMap['DEFAULT_SHIPPING_FEE']) || 0 : currentSettings.default_shipping_fee,
     };
 

@@ -4,11 +4,11 @@ import {
   formatCurrency,
   formatQuantity,
   formatDate,
-  getVietQRUrl,
   formatVietQRMemo,
   getActiveBankAccountInfo,
 } from '../../utils/formatters';
 import { Phone, Sparkles, QrCode, CheckCircle2 } from 'lucide-react';
+import { VietQRDisplay } from '../common/VietQRDisplay';
 
 interface A4OrderInvoiceProps {
   order: Order;
@@ -32,17 +32,6 @@ export const A4OrderInvoice: React.FC<A4OrderInvoiceProps> = ({
 
   const bankInfo = getActiveBankAccountInfo(settings, selectedBank);
   const showQR = settings.show_vietqr !== false && qrSize !== 'none' && !isFullyPaid && !!bankInfo.accountNumber;
-
-  const qrUrl = showQR
-    ? getVietQRUrl(
-        bankInfo.bin,
-        bankInfo.accountNumber,
-        bankInfo.accountName,
-        remainingAmount,
-        qrTransferMemo,
-        (settings.bank_qr_template as any) || 'compact2'
-      )
-    : null;
 
   // Determine QR dimensions
   const qrDimensionClass =
@@ -145,20 +134,21 @@ export const A4OrderInvoice: React.FC<A4OrderInvoiceProps> = ({
 
       {/* 3. PROMINENT PAYMENT & VIETQR BOX */}
       <div className="pt-1 border-t-2 border-slate-700 mt-1">
-        {showQR && qrUrl ? (
+        {showQR ? (
           <div className="flex items-center justify-between gap-1.5 bg-slate-50 p-1 rounded-md border border-slate-300">
-            {/* Left: QR Image - Crisp, High-Contrast and Big */}
-            <div className="shrink-0 flex flex-col items-center bg-white p-0.5 rounded border border-slate-400">
-              <img
-                src={qrUrl}
-                alt="VietQR Code"
-                className={`${qrDimensionClass} object-contain bg-white block`}
-                style={{ imageRendering: 'pixelated' }}
-                loading="eager"
+            {/* Left: VietQR Display - Offline capable, crisp, high-contrast and big */}
+            <div className="shrink-0">
+              <VietQRDisplay
+                bin={bankInfo.bin}
+                accountNumber={bankInfo.accountNumber}
+                accountName={bankInfo.accountName}
+                amount={remainingAmount}
+                memo={qrTransferMemo}
+                template={(settings.bank_qr_template as any) || 'compact2'}
+                sizeClass={qrDimensionClass}
+                showCaption={true}
+                isPrintMode={true}
               />
-              <span className="text-[7.5px] font-black text-slate-800 uppercase tracking-tighter mt-0.5 flex items-center gap-0.5">
-                <QrCode className="w-2 h-2 text-teal-800 inline" /> QUÉT VIETQR
-              </span>
             </div>
 
             {/* Middle: Bank Transfer Info in Text (STK, Bank, Memo) */}
