@@ -1083,11 +1083,23 @@ export async function exportSettingsToGoogleSheets(
   const prepared = prepareSheetData([], [], [], [], settings);
   const settingsData = prepared[SHEET_NAMES.SETTINGS];
 
-  await fetchSheetsApi(`/${spreadsheetId}/values/${SHEET_NAMES.SETTINGS}!A1:C50?valueInputOption=USER_ENTERED`, {
-    method: 'PUT',
+  // 1. Clear old data from settings tab
+  await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
+    method: 'POST',
+    body: JSON.stringify({ ranges: [`${SHEET_NAMES.SETTINGS}!A1:Z100`] }),
+  });
+
+  // 2. Write new formatted settings data
+  await fetchSheetsApi(`/${spreadsheetId}/values:batchUpdate`, {
+    method: 'POST',
     body: JSON.stringify({
-      range: `${SHEET_NAMES.SETTINGS}!A1:C${settingsData.rows.length + 1}`,
-      values: [settingsData.header, ...settingsData.rows],
+      valueInputOption: 'USER_ENTERED',
+      data: [
+        {
+          range: `${SHEET_NAMES.SETTINGS}!A1:C${settingsData.rows.length + 1}`,
+          values: [settingsData.header, ...settingsData.rows],
+        },
+      ],
     }),
   });
 

@@ -14,7 +14,15 @@ import {
   DiffComparisonResult
 } from '../types';
 import { storage } from '../services/storage';
-import { autoSyncAll, pullAndRestoreFromGoogleSheets, exportSettingsToGoogleSheets, SyncStats, RestoreStats } from '../services/googleSheets';
+import {
+  autoSyncAll,
+  pullAndRestoreFromGoogleSheets,
+  exportSettingsToGoogleSheets,
+  searchSpreadsheetsOnDrive,
+  createSeafoodSpreadsheet,
+  SyncStats,
+  RestoreStats,
+} from '../services/googleSheets';
 import { getAccessToken } from '../services/googleAuth';
 
 export type ActiveTab = 
@@ -371,12 +379,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Export only settings to Google Sheets
   const exportSettingsToSheets = async (): Promise<boolean> => {
-    const activeSpreadsheetId = spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
-    if (!activeSpreadsheetId) {
-      addToast('error', 'Chưa có Google Sheets', 'Vui lòng liên kết tệp Google Sheets trước khi xuất cấu hình');
-      return false;
-    }
-
     const token = await getAccessToken();
     if (!token) {
       setSyncStatus('UNAUTHENTICATED');
@@ -384,9 +386,35 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false;
     }
 
+    let activeSpreadsheetId = spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+
+    // If no spreadsheet is bound yet, auto search or create it
+    if (!activeSpreadsheetId) {
+      try {
+        const searchResults = await searchSpreadsheetsOnDrive('Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư');
+        if (searchResults && searchResults.length > 0) {
+          activeSpreadsheetId = searchResults[0].id;
+          setSpreadsheetId(activeSpreadsheetId);
+          setSpreadsheetUrl(searchResults[0].url);
+          localStorage.setItem('seafood_sheets_spreadsheet_id', activeSpreadsheetId);
+          localStorage.setItem('seafood_sheets_spreadsheet_url', searchResults[0].url);
+        } else {
+          const created = await createSeafoodSpreadsheet('Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư');
+          activeSpreadsheetId = created.spreadsheetId;
+          setSpreadsheetId(created.spreadsheetId);
+          setSpreadsheetUrl(created.spreadsheetUrl);
+          localStorage.setItem('seafood_sheets_spreadsheet_id', created.spreadsheetId);
+          localStorage.setItem('seafood_sheets_spreadsheet_url', created.spreadsheetUrl);
+        }
+      } catch (err: any) {
+        addToast('error', 'Lỗi tìm hoặc tạo Sheets', err?.message || 'Không thể tạo tệp Google Sheets');
+        return false;
+      }
+    }
+
     try {
       await exportSettingsToGoogleSheets(activeSpreadsheetId, storage.getSettings());
-      addToast('success', 'Đã lưu cấu hình lên Google Sheets', 'Tab "Cấu Hình Hệ Thống" đã được cập nhật!');
+      addToast('success', 'Đã lưu cấu hình lên Google Sheets', 'Tab "Cấu Hình Hệ Thống" đã được cập nhật thành công!');
       return true;
     } catch (err: any) {
       const isAuthErr =
