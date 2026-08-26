@@ -20,12 +20,16 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   ShieldCheck,
+  Globe,
+  Key,
+  HelpCircle,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
   googleSignIn,
   googleLogout,
   getAccessToken,
+  setAccessTokenInMemory,
   initAuth,
 } from '../../services/googleAuth';
 import {
@@ -80,8 +84,18 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   const [showConfirmPull, setShowConfirmPull] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
+  // Unauthorized Domain specific state & fallback
+  const [showUnauthorizedGuide, setShowUnauthorizedGuide] = useState(false);
+  const [currentHostname, setCurrentHostname] = useState('');
+  const [copiedDomain, setCopiedDomain] = useState(false);
+  const [showManualToken, setShowManualToken] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
+
   // Initialize auth listener
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setCurrentHostname(window.location.hostname || 'ais-dev-mjrtsn6o2rldozpv2p6b5r-147582393384.asia-southeast1.run.app');
+    }
     const unsubscribe = initAuth(
       (user, _token) => {
         setCurrentUser(user);
@@ -100,6 +114,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   const handleSignIn = async () => {
     setIsAuthLoading(true);
     setErrorMessage(null);
+    setShowUnauthorizedGuide(false);
     try {
       const res = await googleSignIn();
       if (res) {
@@ -115,15 +130,86 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMessage(err?.message || 'Đăng nhập Google thất bại');
-      addToast({
-        type: 'ERROR',
-        title: 'Đăng nhập thất bại',
-        message: err?.message || 'Không thể đăng nhập Google',
-      });
+      const isDomainError =
+        err?.code === 'auth/unauthorized-domain' ||
+        err?.message?.includes('unauthorized-domain') ||
+        err?.message?.includes('auth/unauthorized-domain');
+
+      if (isDomainError) {
+        setShowUnauthorizedGuide(true);
+        const domain = typeof window !== 'undefined' ? window.location.hostname : 'run.app';
+        setCurrentHostname(domain);
+        setErrorMessage(
+          `Firebase Authentication chưa ủy quyền tên miền "${domain}". Vui lòng thêm tên miền này vào danh sách Authorized Domains trên Firebase Console.`
+        );
+        addToast({
+          type: 'WARNING',
+          title: 'Cần ủy quyền tên miền Firebase',
+          message: `Tên miền ${domain} cần được thêm vào Firebase Console > Authentication > Settings > Authorized domains.`,
+        });
+      } else {
+        setErrorMessage(err?.message || 'Đăng nhập Google thất bại');
+        addToast({
+          type: 'ERROR',
+          title: 'Đăng nhập thất bại',
+          message: err?.message || 'Không thể đăng nhập Google',
+        });
+      }
     } finally {
       setIsAuthLoading(false);
     }
+  };
+
+  const handleApplyManualToken = () => {
+    if (!tokenInput.trim()) {
+      addToast({
+        type: 'ERROR',
+        title: 'Thiếu Token',
+        message: 'Vui lòng dán mã Access Token hợp lệ từ Google OAuth.',
+      });
+      return;
+    }
+    setAccessTokenInMemory(tokenInput.trim());
+    setCurrentUser({
+      uid: 'manual-token-user',
+      email: 'connected-via-token@google.com',
+      displayName: 'Tài khoản Google (Token trực tiếp)',
+      emailVerified: true,
+      isAnonymous: false,
+      metadata: {},
+      providerData: [],
+      refreshToken: '',
+      tenantId: null,
+      delete: async () => {},
+      getIdToken: async () => '',
+      getIdTokenResult: async () => ({} as any),
+      reload: async () => {},
+      toJSON: () => ({}),
+      phoneNumber: null,
+      photoURL: null,
+      providerId: 'google.com',
+    } as any);
+
+    setShowManualToken(false);
+    setShowUnauthorizedGuide(false);
+    setErrorMessage(null);
+    addToast({
+      type: 'SUCCESS',
+      title: 'Đã nạp Access Token',
+      message: 'Đã thiết lập mã xác thực Google Sheets thành công. Sẵn sàng đồng bộ!',
+    });
+    triggerSyncNow();
+  };
+
+  const copyDomainToClipboard = (textToCopy: string) => {
+    navigator.clipboard.writeText(textToCopy);
+    setCopiedDomain(true);
+    setTimeout(() => setCopiedDomain(false), 2000);
+    addToast({
+      type: 'INFO',
+      title: 'Đã sao chép',
+      message: `Đã sao chép "${textToCopy}" vào bộ nhớ tạm.`,
+    });
   };
 
   // Handle Google Sign Out with automatic reverse-sync protection to prevent data loss
@@ -460,6 +546,109 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   </svg>
                   <span>{isAuthLoading ? 'Đang xác thực Google...' : 'Đăng nhập với Google (Sign in with Google)'}</span>
                 </button>
+
+                {/* Unauthorized Domain Guide Card */}
+                {(showUnauthorizedGuide || errorMessage?.includes('unauthorized-domain')) && (
+                  <div className="mt-3 p-4 bg-amber-50/90 border border-amber-300 rounded-2xl text-xs text-amber-900 space-y-3 animate-fadeIn">
+                    <div className="flex items-start gap-2.5">
+                      <Globe className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-black text-amber-950 text-sm">
+                          Cách khắc phục lỗi "auth/unauthorized-domain":
+                        </div>
+                        <p className="text-amber-800 mt-0.5 leading-relaxed">
+                          Firebase yêu cầu thêm tên miền máy chủ hiện tại vào danh sách <b>Authorized Domains</b> trước khi đăng nhập Google.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Step 1: Copy Hostname */}
+                    <div className="bg-white p-3 rounded-xl border border-amber-200 space-y-2">
+                      <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+                        <span>1. Tên miền cần thêm vào Firebase:</span>
+                        {copiedDomain && (
+                          <span className="text-emerald-700 font-bold text-[10px] flex items-center gap-1">
+                            <Check className="w-3 h-3" /> Đã sao chép
+                          </span>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 px-2.5 py-1.5 bg-slate-100 rounded-lg text-slate-800 font-mono text-[11px] select-all break-all">
+                          {currentHostname || 'ais-dev-mjrtsn6o2rldozpv2p6b5r-147582393384.asia-southeast1.run.app'}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => copyDomainToClipboard(currentHostname || 'ais-dev-mjrtsn6o2rldozpv2p6b5r-147582393384.asia-southeast1.run.app')}
+                          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-[11px] flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer"
+                        >
+                          <Copy className="w-3.5 h-3.5" /> Sao chép
+                        </button>
+                      </div>
+
+                      <div className="text-[11px] text-slate-500">
+                        (Mẹo: Bạn cũng có thể thêm miền gốc <b>run.app</b> để tự động cho phép mọi bản preview)
+                      </div>
+                    </div>
+
+                    {/* Step 2: Open Firebase Console */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <a
+                        href="https://console.firebase.google.com/project/gen-lang-client-0135903613/authentication/settings"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-xl text-xs transition-colors shadow-xs"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Mở Firebase Console &gt; Authorized domains
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowManualToken(!showManualToken)}
+                        className="text-xs text-amber-800 hover:text-amber-950 font-bold underline cursor-pointer"
+                      >
+                        {showManualToken ? 'Ẩn nạp Token thủ công' : 'Hoặc nạp Token thủ công (Tùy chọn)'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Manual Token Input Box */}
+                {showManualToken && (
+                  <div className="p-3.5 bg-slate-100 rounded-xl border border-slate-300 space-y-2.5 animate-fadeIn">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <Key className="w-3.5 h-3.5 text-teal-700" /> Nhập Google OAuth Access Token
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowManualToken(false)}
+                        className="text-[11px] text-slate-500 hover:text-slate-700 cursor-pointer"
+                      >
+                        Đóng
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-600">
+                      Dán Access Token (lấy từ Google OAuth Playground hoặc gcloud CLI có quyền Sheets/Drive) để đồng bộ ngay mà không cần đợi cập nhật domain:
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={tokenInput}
+                        onChange={(e) => setTokenInput(e.target.value)}
+                        placeholder="ya29.a0AfH6SM..."
+                        className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-teal-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleApplyManualToken}
+                        className="px-3.5 py-1.5 bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                      >
+                        Áp dụng
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
