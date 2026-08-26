@@ -1,10 +1,44 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+// Persistent Idempotency File Storage on Server
+const IDEMPOTENCY_FILE = path.join(process.cwd(), '.telegram_idempotency.json');
+
+interface IdempotencyRecord {
+  session_id: string;
+  batch_id: string;
+  processed_at: string;
+  status: 'processed';
+  data: any;
+}
+
+function loadIdempotencyStore(): Record<string, IdempotencyRecord> {
+  try {
+    if (fs.existsSync(IDEMPOTENCY_FILE)) {
+      const raw = fs.readFileSync(IDEMPOTENCY_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.error('[Idempotency] Failed to read store file:', err);
+  }
+  return {};
+}
+
+function saveIdempotencyRecord(record: IdempotencyRecord): void {
+  try {
+    const store = loadIdempotencyStore();
+    store[record.batch_id] = record;
+    fs.writeFileSync(IDEMPOTENCY_FILE, JSON.stringify(store, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[Idempotency] Failed to write record:', err);
+  }
+}
 
 let aiClient: GoogleGenAI | null = null;
 function getGemini(): GoogleGenAI {
@@ -404,6 +438,268 @@ Hãy trả về JSON theo đúng định dạng sau:
       return res.status(is503 ? 503 : 500).json({
         error: userFriendlyMsg,
         isTemporary: is503,
+      });
+    }
+  });
+
+  // API Route: Telegram Gateway Batch Receiver
+  // Transport: Telegram -> Google Apps Script -> POST /api/telegram/batch
+  app.post('/api/telegram/batch', async (req, res) => {
+    try {
+      // 1. Authentication Check via X-Telegram-Gateway-Key
+      const gatewayKeyHeader = req.header('X-Telegram-Gateway-Key') || req.header('x-telegram-gateway-key');
+      const expectedKey = process.env.TELEGRAM_GATEWAY_KEY;
+
+      if (expectedKey) {
+        if (!gatewayKeyHeader || gatewayKeyHeader !== expectedKey) {
+          console.warn('[Telegram Gateway] Unauthorized request: Key mismatch or missing');
+          return res.status(401).json({
+            success: false,
+            status: 'failed',
+            message: 'Unauthorized: Header X-Telegram-Gateway-Key không hợp lệ hoặc thiếu.',
+          });
+        }
+      } else {
+        console.warn('[Telegram Gateway] TELEGRAM_GATEWAY_KEY is not configured in server env. Proceeding with warning.');
+      }
+
+      // 2. Validate Payload
+      const { session_id, batch_id, order_date, items, condoName, existingProducts } = req.body;
+
+      if (!session_id || !batch_id) {
+        return res.status(400).json({
+          success: false,
+          session_id: session_id || '',
+          batch_id: batch_id || '',
+          status: 'failed',
+          message: 'Thiếu trường bắt buộc session_id hoặc batch_id trong payload.',
+        });
+      }
+
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({
+          success: false,
+          session_id,
+          batch_id,
+          status: 'failed',
+          message: 'Batch không có dữ liệu items hoặc items rỗng.',
+        });
+      }
+
+      // 3. Persistent Idempotency Check
+      const idempotencyStore = loadIdempotencyStore();
+      if (idempotencyStore[batch_id]) {
+        const existingRecord = idempotencyStore[batch_id];
+        console.log(`[Telegram Gateway] Idempotent hit: Batch ${batch_id} already processed at ${existingRecord.processed_at}`);
+        return res.status(200).json({
+          success: true,
+          session_id: existingRecord.session_id || session_id,
+          batch_id: batch_id,
+          status: 'already_processed',
+          message: `Batch ${batch_id} đã được tiếp nhận và xử lý thành công trước đó (Idempotent replay).`,
+          data: existingRecord.data,
+        });
+      }
+
+      // 4. Assemble RAW items into Multimodal Gemini pipeline (Preserving 100% order and content)
+      const contents: any[] = [];
+      const textParts: string[] = [];
+      let imageCount = 0;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type === 'text' && typeof item.content === 'string') {
+          textParts.push(item.content);
+        } else if (item.type === 'image') {
+          // Direct base64 image from Apps Script
+          const rawBase64 = item.image_base64 || item.base64 || item.data || '';
+          const mimeType = item.mime_type || item.imageMimeType || 'image/jpeg';
+
+          if (rawBase64) {
+            const cleanBase64 = rawBase64.replace(/^data:image\/[a-zA-Z0-9+]+;base64,/, '');
+            contents.push({
+              inlineData: {
+                mimeType: mimeType,
+                data: cleanBase64,
+              },
+            });
+            imageCount++;
+          }
+
+          if (item.caption && typeof item.caption === 'string' && item.caption.trim()) {
+            textParts.push(`[Ghi chú kèm ảnh #${imageCount}]: ${item.caption}`);
+          }
+        }
+      }
+
+      const combinedRawText = textParts.join('\n\n');
+
+      if (contents.length === 0 && !combinedRawText.trim()) {
+        return res.status(400).json({
+          success: false,
+          session_id,
+          batch_id,
+          status: 'failed',
+          message: 'Không tìm thấy nội dung văn bản hoặc hình ảnh hợp lệ trong batch.',
+        });
+      }
+
+      // 5. Build Prompt for Gemini using Existing Pipeline Prompt
+      const systemPrompt = `Bạn là chuyên gia kế toán & quản lý gom đơn hải sản quê phục vụ cư dân chung cư tại Việt Nam (${condoName || 'Chung cư Geleximco 897 Giải Phóng'}).
+Nhiệm vụ của bạn là đọc và phân tích ảnh ghi chú (như ảnh chụp ứng dụng Notes, tin nhắn Zalo, sổ tay viết tay gom đơn hải sản) hoặc văn bản ghi chú thô nhận từ Telegram, sau đó trích xuất thành danh sách đợt gom hàng và đơn hàng chi tiết từng căn hộ.
+
+QUY TẮC PHÂN TÍCH TÊN CĂN HỘ & TÒA NHÀ:
+- Nếu thấy số phòng kèm ký tự chữ cái (ví dụ: "1903A", "1203A", "1606A", "1501A", "2303A", "1707B", "p1707B", "1006B", "904B", "0806B", "2206B"):
+  + room: GIỮ NGUYÊN ĐẦY ĐỦ CẢ SỐ PHÒNG VÀ CHỮ CÁI HẬU TỐ (ví dụ: "1903A", "1707B", "1006B", "904B", "1203A"). Tuyệt đối không cắt bỏ chữ cái A, B, C, D ở cuối phòng.
+  + building: "Tòa A" (nếu đuôi A) hoặc "Tòa B" (nếu đuôi B)
+  + customer_name: "Căn 1903A" hoặc "Căn 1707B"
+- Nếu là tên khách quen (ví dụ: "C Phô Mai", "Chị Lan 1205", "Anh Tuấn"):
+  + customer_name: "Chị Phô Mai"
+  + room: "1205" hoặc "Khách quen" nếu không có số phòng
+  + building: "Tòa A" (mặc định)
+
+QUY TẮC ĐẶC TRƯNG HẢI SẢN & TỪ LÓNG CHỢ HẢI SẢN VIỆT NAM:
+- "rế" hoặc "1 rế", "5 rế": Rế hải sản / Mẹt ram rế / Rế mực / Rế tôm (Đơn vị: 'khay' hoặc 'hộp', giá ước tính ~100.000đ - 140.000đ/khay).
+- "xù" hoặc "1 xù": Tôm/Chả bao xù / Tôm chiên xù (Đơn vị: 'hộp' hoặc 'khay', giá ước tính ~120.000đ/hộp).
+- "cá bơn": Cá bơn tươi (kg)
+- "mực trứng đổi mực nhỏ": Tên: "Mực trứng", processing_note: "Đổi mực nhỏ"
+- "cá bạc má": Cá bạc má tươi (kg)
+- "chả mực loại 1": Chả mực Hạ Long Loại 1 (kg)
+- "chả cá thu cá nhồng": Chả cá thu cá nhồng (kg)
+- "nõn sắt nhỏ nấu canh" / "nõn sắt": Nõn tôm sắt tươi bóc sẵn (kg), processing_note: "Nấu canh"
+- "mực sz 20-22": Mực ống tươi, size: "Size 20-22 con/kg"
+- "tôm he sz 30-32": Tôm he biển tươi, size: "Size 30-32 con/kg"
+- "tôm he vẫn size 14-16": Tôm he biển tươi, size: "Size 14-16 con/kg"
+- "cá thu 1 nắng": Cá thu một nắng (kg)
+- "khay nõn bộp": Nõn tôm bộp tươi (Đơn vị: 'khay', số lượng 1)
+- "tuộc sữa": Bạch tuộc sữa tươi (kg)
+- "chả cá": Chả cá biển (kg)
+- "cá mối": Cá mối tươi (kg)
+- "cá hố": Cá hố tươi (kg)
+
+Ước tính giá hợp lý theo thị trường hải sản Việt Nam nếu không có giá trong ghi chú (hoặc khớp với danh mục sản phẩm hiện có nếu khớp tên).
+Đơn vị (unit) chuẩn: 'kg' | 'gram' | 'con' | 'hộp' | 'túi' | 'khay' | 'combo'.
+
+Hãy trả về JSON theo đúng định dạng sau:
+{
+  "batch_name": "Tên đợt gom hàng (ví dụ: Đợt Gom Hải Sản ${order_date || 'Mới'})",
+  "note": "Ghi chú chung của đợt nếu có",
+  "orders": [
+    {
+      "customer_name": "Căn 1903A",
+      "building": "Tòa A",
+      "room": "1903A",
+      "phone": "",
+      "items": [
+        {
+          "product_name": "Cá bơn tươi",
+          "quantity": 0.5,
+          "unit": "kg",
+          "size": "",
+          "estimated_price": 280000,
+          "processing_note": "",
+          "item_note": "0.5kg cá bơn"
+        },
+        {
+          "product_name": "Rế hải sản",
+          "quantity": 1,
+          "unit": "khay",
+          "size": "",
+          "estimated_price": 120000,
+          "processing_note": "",
+          "item_note": "1 rế"
+        }
+      ]
+    }
+  ]
+}`;
+
+      let userTextPrompt = combinedRawText
+        ? `Nội dung ghi chú Telegram cần phân tích:\n${combinedRawText}`
+        : 'Hãy phân tích các hình ảnh và ghi chú gom đơn hải sản từ Telegram này và trích xuất thông tin đợt hàng, danh sách từng phòng cư dân và chi tiết các món hải sản.';
+
+      if (order_date) {
+        userTextPrompt += `\nNgày gom đơn mục tiêu: ${order_date}`;
+      }
+
+      if (existingProducts && Array.isArray(existingProducts) && existingProducts.length > 0) {
+        userTextPrompt += `\n\nDanh mục sản phẩm hiện có của cửa hàng (ưu tiên khớp tên và giá):\n` +
+          existingProducts.map((p: any) => `- ${p.product_name} (${p.unit}): ~${p.default_price?.toLocaleString('vi-VN')}đ`).join('\n');
+      }
+
+      contents.push(userTextPrompt);
+
+      let parsedData: any = null;
+      let usedEngine = 'gemini_ai';
+
+      // If Gemini API Key is available, run through existing Gemini Pipeline
+      if (process.env.GEMINI_API_KEY) {
+        const ai = getGemini();
+        const { responseText, usedModel } = await callGeminiWithFallback(ai, {
+          contents: contents,
+          config: {
+            systemInstruction: systemPrompt,
+            responseMimeType: 'application/json',
+          },
+        });
+
+        try {
+          parsedData = JSON.parse(responseText);
+        } catch (err) {
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            parsedData = JSON.parse(jsonMatch[0]);
+          } else {
+            throw new Error('Không thể phân tích định dạng JSON từ phản hồi AI: ' + responseText.slice(0, 100));
+          }
+        }
+        usedEngine = usedModel;
+      } else {
+        // Fallback to Rule-based Parser for text-only items if GEMINI_API_KEY is not yet configured
+        if (combinedRawText) {
+          parsedData = ruleBasedTextParser(combinedRawText);
+          usedEngine = 'rule_based_fallback';
+        } else {
+          return res.status(500).json({
+            success: false,
+            session_id,
+            batch_id,
+            status: 'failed',
+            message: 'Chưa cấu hình GEMINI_API_KEY trên server để xử lý hình ảnh từ Telegram.',
+          });
+        }
+      }
+
+      // 6. Save Persistent Idempotency Record
+      const recordToSave: IdempotencyRecord = {
+        session_id,
+        batch_id,
+        processed_at: new Date().toISOString(),
+        status: 'processed',
+        data: parsedData,
+      };
+      saveIdempotencyRecord(recordToSave);
+
+      console.log(`[Telegram Gateway] Successfully processed Batch ${batch_id} (${parsedData?.orders?.length || 0} orders). Engine: ${usedEngine}`);
+
+      // 7. Return Standard Response
+      return res.status(200).json({
+        success: true,
+        session_id,
+        batch_id,
+        status: 'processed',
+        message: `Batch ${batch_id} đã được xử lý thành công (${parsedData?.orders?.length || 0} đơn hàng).`,
+        data: parsedData,
+        engine: usedEngine,
+      });
+    } catch (error: any) {
+      console.error('[Telegram Gateway] Lỗi xử lý batch:', error);
+      return res.status(500).json({
+        success: false,
+        session_id: req.body?.session_id || '',
+        batch_id: req.body?.batch_id || '',
+        status: 'failed',
+        message: error?.message || 'Đã xảy ra lỗi nội bộ máy chủ khi phân tích batch từ Telegram.',
       });
     }
   });
