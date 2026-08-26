@@ -89,7 +89,10 @@ export const SettingsView: React.FC = () => {
   const handleExportSettingsToSheets = async () => {
     setIsExportingSheets(true);
     try {
-      await exportSettingsToSheets();
+      const ok = await exportSettingsToSheets();
+      if (!ok) {
+        setIsSheetsSyncOpen(true);
+      }
     } finally {
       setIsExportingSheets(false);
     }
@@ -101,6 +104,9 @@ export const SettingsView: React.FC = () => {
       const stats = await pullFromSheets();
       if (stats) {
         setFormData({ ...storeSettings });
+      } else {
+        // If failed due to unauthenticated or missing sheet, open sync modal
+        setIsSheetsSyncOpen(true);
       }
     } finally {
       setIsPullingSheets(false);

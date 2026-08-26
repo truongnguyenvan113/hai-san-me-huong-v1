@@ -83,6 +83,18 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Lỗi đăng nhập Google:', error);
+    if (error?.code === 'auth/popup-blocked' || error?.message?.includes('popup-blocked')) {
+      const customErr = new Error(
+        'Cửa sổ đăng nhập đã bị trình duyệt chặn (auth/popup-blocked). Vui lòng bấm vào biểu tượng Popup trên thanh địa chỉ để Cho phép, hoặc mở ứng dụng trong Tab mới.'
+      );
+      (customErr as any).code = 'auth/popup-blocked';
+      throw customErr;
+    }
+    if (error?.code === 'auth/popup-closed-by-user' || error?.message?.includes('popup-closed-by-user')) {
+      const customErr = new Error('Cửa sổ đăng nhập đã được đóng trước khi hoàn tất xác thực.');
+      (customErr as any).code = 'auth/popup-closed-by-user';
+      throw customErr;
+    }
     throw error;
   } finally {
     isSigningIn = false;

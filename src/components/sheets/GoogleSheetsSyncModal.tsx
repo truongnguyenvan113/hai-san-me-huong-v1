@@ -92,6 +92,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 
   // Unauthorized Domain specific state & fallback
   const [showUnauthorizedGuide, setShowUnauthorizedGuide] = useState(false);
+  const [showPopupBlockedGuide, setShowPopupBlockedGuide] = useState(false);
   const [currentHostname, setCurrentHostname] = useState('');
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
@@ -135,6 +136,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     setIsAuthLoading(true);
     setErrorMessage(null);
     setShowUnauthorizedGuide(false);
+    setShowPopupBlockedGuide(false);
     try {
       const res = await googleSignIn();
       if (res) {
@@ -150,12 +152,27 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       }
     } catch (err: any) {
       console.error(err);
+      const isPopupBlocked =
+        err?.code === 'auth/popup-blocked' ||
+        err?.message?.includes('popup-blocked') ||
+        err?.message?.includes('cửa sổ đăng nhập đã bị trình duyệt chặn');
+
       const isDomainError =
         err?.code === 'auth/unauthorized-domain' ||
         err?.message?.includes('unauthorized-domain') ||
         err?.message?.includes('auth/unauthorized-domain');
 
-      if (isDomainError) {
+      if (isPopupBlocked) {
+        setShowPopupBlockedGuide(true);
+        setErrorMessage(
+          'Trình duyệt hoặc khung hiển thị đã chặn cửa sổ Popup đăng nhập. Vui lòng mở ứng dụng trong Tab mới hoặc nhấn Cho phép Popup.'
+        );
+        addToast({
+          type: 'WARNING',
+          title: 'Cửa sổ popup bị chặn',
+          message: 'Vui lòng bấm "Mở ứng dụng ở Tab mới" để đăng nhập Google thuận tiện nhất.',
+        });
+      } else if (isDomainError) {
         setShowUnauthorizedGuide(true);
         const domain = typeof window !== 'undefined' ? window.location.hostname : 'run.app';
         setCurrentHostname(domain);
@@ -450,13 +467,26 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
             </div>
           </div>
 
-          <button
-            id="close-sheets-sync-modal-btn"
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href={typeof window !== 'undefined' ? window.location.href : '#'}
+              target="_blank"
+              rel="noreferrer"
+              className="px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+              title="Mở ứng dụng trong Tab trình duyệt mới (Khắc phục triệt để lỗi chặn popup)"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Mở Tab Mới</span>
+            </a>
+
+            <button
+              id="close-sheets-sync-modal-btn"
+              onClick={onClose}
+              className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Body */}
@@ -547,7 +577,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
             </div>
 
             {currentUser ? (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200/80">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200/80">
                 <div className="flex items-center gap-3">
                   {currentUser.photoURL ? (
                     <img
@@ -569,19 +599,50 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowDisconnectDialog(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:text-rose-600 font-semibold bg-white border border-slate-200 rounded-lg hover:bg-rose-50 transition-colors self-start sm:self-center cursor-pointer"
-                >
-                  <LogOut className="w-3.5 h-3.5" /> Ngắt kết nối
-                </button>
+                <div className="flex items-center gap-2 self-start sm:self-center">
+                  <button
+                    type="button"
+                    onClick={handleSignIn}
+                    disabled={isAuthLoading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-teal-800 hover:text-teal-900 font-bold bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-colors cursor-pointer"
+                    title="Làm mới lại quyền và phiên xác thực Google Workspace"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isAuthLoading ? 'animate-spin' : ''}`} />
+                    {isAuthLoading ? 'Đang xác thực...' : 'Làm mới phiên / Đăng nhập lại'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowDisconnectDialog(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:text-rose-600 font-semibold bg-white border border-slate-200 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" /> Ngắt kết nối
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
                 <p className="text-xs text-slate-600">
                   Đăng nhập tài khoản Google để cấp quyền tạo và cập nhật các trang tính cho ứng dụng quản lý gom đơn hải sản.
                 </p>
+
+                {typeof window !== 'undefined' && window.self !== window.top && (
+                  <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-2">
+                      <ExternalLink className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Đang xem trước trong iFrame: Bạn nên mở ở Tab mới để tránh trình duyệt chặn Popup Google.</span>
+                    </div>
+                    <a
+                      href={`${window.location.origin}${window.location.pathname}?sync=true#sync`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] rounded-lg shrink-0 transition-colors"
+                    >
+                      Mở Tab Mới
+                    </a>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={handleSignIn}
@@ -608,6 +669,64 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   </svg>
                   <span>{isAuthLoading ? 'Đang xác thực Google...' : 'Đăng nhập với Google (Sign in with Google)'}</span>
                 </button>
+
+                {/* Popup Blocked Rescue Card */}
+                {(showPopupBlockedGuide || errorMessage?.includes('popup-blocked') || errorMessage?.includes('chặn')) && (
+                  <div className="mt-3 p-4 bg-sky-50/95 border border-sky-300 rounded-2xl text-xs text-sky-950 space-y-3 animate-fadeIn">
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="w-5 h-5 text-sky-700 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <div className="font-black text-sky-950 text-sm">
+                          Cửa sổ đăng nhập bị trình duyệt chặn (Popup Blocked)
+                        </div>
+                        <p className="text-sky-800 leading-relaxed">
+                          Do ứng dụng đang chạy trong khung iFrame của công cụ lập trình, trình duyệt có thể tự động chặn cửa sổ đăng nhập Google. Bạn có các giải pháp xử lý cực kỳ đơn giản sau:
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      <a
+                        href={typeof window !== 'undefined' ? window.location.href : '#'}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center justify-center gap-2 p-3 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl text-xs shadow-xs transition-all cursor-pointer text-center"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        <span>1. Mở trong Tab mới (Khuyên dùng)</span>
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={handleSignIn}
+                        disabled={isAuthLoading}
+                        className="flex items-center justify-center gap-2 p-3 bg-white hover:bg-slate-50 text-sky-900 border border-sky-300 font-bold rounded-xl text-xs shadow-xs transition-all cursor-pointer text-center"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${isAuthLoading ? 'animate-spin' : ''}`} />
+                        <span>2. Thử mở lại cửa sổ Popup</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-white/80 p-3 rounded-xl border border-sky-200 text-[11px] text-sky-900 space-y-1">
+                      <div className="font-bold flex items-center gap-1.5 text-sky-950">
+                        <span>💡 Cách cho phép Popup vĩnh viễn trên trình duyệt:</span>
+                      </div>
+                      <p className="text-slate-600">
+                        Nhìn lên góc phải thanh địa chỉ (URL), bấm vào biểu tượng <b>Cửa sổ bị chặn (🚫)</b> &rarr; Chọn <b>"Luôn cho phép cửa sổ bật lên từ trang này"</b> &rarr; Bấm <b>Xong</b> và thử lại.
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <button
+                        type="button"
+                        onClick={() => setShowManualToken(!showManualToken)}
+                        className="text-xs text-sky-800 hover:text-sky-950 font-bold underline cursor-pointer"
+                      >
+                        {showManualToken ? 'Ẩn nạp Token thủ công' : 'Hoặc nạp Access Token thủ công &rarr;'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Unauthorized Domain Guide Card */}
                 {(showUnauthorizedGuide || errorMessage?.includes('unauthorized-domain')) && (

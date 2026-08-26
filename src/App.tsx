@@ -43,6 +43,17 @@ const MainLayout: React.FC = () => {
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
+  // Auto open Google Sheets sync modal if URL hash or search contains sync
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const hasSyncHash = window.location.hash.includes('sync');
+      const hasSyncQuery = new URLSearchParams(window.location.search).get('sync') === 'true';
+      if (hasSyncHash || hasSyncQuery) {
+        setIsSheetsSyncOpen(true);
+      }
+    }
+  }, [setIsSheetsSyncOpen]);
+
   const renderActiveView = () => {
     switch (activeTab) {
       case 'DASHBOARD':
