@@ -320,15 +320,34 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
     // 2. Process Orders & Customers
     let orderCount = 0;
 
+    // Track products and customers in local map during the loop to prevent duplicates
+    const knownProductsMap = new Map<string, Product>();
+    (products || []).forEach((p) => {
+      if (p?.product_name) {
+        knownProductsMap.set(p.product_name.toLowerCase().trim().replace(/\s+/g, ' '), p);
+      }
+    });
+
+    const knownCustomersMap = new Map<string, Customer>();
+    (customers || []).forEach((c) => {
+      const key = `${(c.building || '').toLowerCase().trim()}_${(c.room || '').toLowerCase().trim()}`;
+      knownCustomersMap.set(key, c);
+    });
+
     parsedData.orders.forEach((pOrder, oIdx) => {
       if (pOrder.items.length === 0) return;
 
       // Find or create customer
-      let customer = customers.find(
-        (c) =>
-          c.room.trim().toLowerCase() === pOrder.room.trim().toLowerCase() &&
-          c.building.trim().toLowerCase() === pOrder.building.trim().toLowerCase()
-      );
+      const custKey = `${(pOrder.building || '').toLowerCase().trim()}_${(pOrder.room || '').toLowerCase().trim()}`;
+      let customer = knownCustomersMap.get(custKey);
+
+      if (!customer) {
+        customer = customers.find(
+          (c) =>
+            c.room.trim().toLowerCase() === pOrder.room.trim().toLowerCase() &&
+            c.building.trim().toLowerCase() === pOrder.building.trim().toLowerCase()
+        );
+      }
 
       if (!customer) {
         const newCustomerId = `CUST-${Date.now()}-${oIdx}`;
@@ -342,6 +361,7 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
+        knownCustomersMap.set(custKey, customer);
         addCustomer(customer);
       }
 
@@ -351,23 +371,29 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
 
       let subtotal = 0;
       const orderItems: OrderItem[] = pOrder.items.map((it, itIdx) => {
-        // Find existing product or create new one
-        let product = products.find(
-          (p) => p.product_name.toLowerCase().trim() === it.product_name.toLowerCase().trim()
-        );
+        // Find existing product or create new one in local map
+        const normItemName = (it.product_name || 'Hải sản').toLowerCase().trim().replace(/\s+/g, ' ');
+        let product = knownProductsMap.get(normItemName);
+
+        if (!product) {
+          product = products.find(
+            (p) => p.product_name.toLowerCase().trim().replace(/\s+/g, ' ') === normItemName
+          );
+        }
 
         if (!product) {
           const newProdId = `PROD-${Date.now()}-${itIdx}`;
           product = {
             product_id: newProdId,
             sku: `HS-${Date.now().toString().slice(-4)}`,
-            product_name: it.product_name,
+            product_name: it.product_name.trim(),
             category: 'Hải sản',
             unit: it.unit,
             size: it.size,
             default_price: it.estimated_price || 200000,
             status: 'ACTIVE',
           };
+          knownProductsMap.set(normItemName, product);
           addProduct(product);
         }
 
@@ -378,7 +404,7 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
           order_item_id: `ITEM-${Date.now()}-${itIdx}`,
           order_id: orderId,
           product_id: product.product_id,
-          product_name: it.product_name,
+          product_name: it.product_name.trim(),
           unit: it.unit,
           size: it.size,
           quantity_ordered: it.quantity,

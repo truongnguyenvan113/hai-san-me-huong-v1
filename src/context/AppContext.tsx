@@ -465,13 +465,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addProduct = (product: Product) => {
     storage.addProduct(product);
     setProducts(storage.getProducts());
-    addToast('success', 'Đã thêm sản phẩm', product.product_name);
+    addToast('success', 'Đã lưu danh mục hải sản', `${product.product_name} - Đang đồng bộ lên Google Sheets...`);
+    executeAutoSync(true);
   };
 
   const updateProduct = (product: Product) => {
     storage.updateProduct(product);
     setProducts(storage.getProducts());
-    addToast('success', 'Đã cập nhật', product.product_name);
+    addToast('success', 'Đã cập nhật hải sản', `${product.product_name} - Đang đồng bộ lên Google Sheets...`);
+    executeAutoSync(true);
   };
 
   const addCustomer = (customer: Customer) => {

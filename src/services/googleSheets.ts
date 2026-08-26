@@ -410,7 +410,7 @@ export function prepareSheetData(
     ];
   });
 
-  // Tab 4: Danh Mục Hải Sản
+  // Tab 4: Danh Mục Hải Sản (Tự động lọc trùng tên hải sản & hợp nhất thông tin đầy đủ nhất)
   const productsHeader = [
     'Mã SKU',
     'Tên Hải Sản',
@@ -423,7 +423,34 @@ export function prepareSheetData(
     'Mô Tả Sản Phẩm',
   ];
 
-  const productsRows = products.map((p) => [
+  // Map to enforce unique seafood product names (normalized)
+  const uniqueProductsMap = new Map<string, Product>();
+
+  (products || []).forEach((p) => {
+    if (!p || !p.product_name) return;
+    const normKey = p.product_name.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!normKey) return;
+    if (!uniqueProductsMap.has(normKey)) {
+      uniqueProductsMap.set(normKey, p);
+    } else {
+      const existing = uniqueProductsMap.get(normKey)!;
+      uniqueProductsMap.set(normKey, {
+        ...existing,
+        sku: existing.sku || p.sku,
+        category: existing.category && existing.category !== 'Hải sản' ? existing.category : p.category || existing.category,
+        size: existing.size || p.size,
+        origin: existing.origin || p.origin,
+        unit: existing.unit || p.unit,
+        default_price: existing.default_price || p.default_price,
+        description: existing.description || p.description,
+        status: existing.status === 'ACTIVE' || p.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+      });
+    }
+  });
+
+  const uniqueProductList = Array.from(uniqueProductsMap.values());
+
+  const productsRows = uniqueProductList.map((p) => [
     p.sku,
     p.product_name,
     p.category || '',
@@ -1078,12 +1105,23 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     const colStatus = findColIndex(pHeaders, ['trạng thái', 'tình trạng'], 7);
     const colDesc = findColIndex(pHeaders, ['mô tả', 'ghi chú'], 8);
 
+    const seenProductNames = new Set<string>();
+
     for (let i = 1; i < productsRows.length; i++) {
       const r = productsRows[i];
       if (!r || r.length === 0) continue;
       const sku = String(r[colSku] || '').trim();
       const pName = String(r[colPName] || '').trim();
       if (!sku && !pName) continue;
+
+      const normName = (pName || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (normName && seenProductNames.has(normName)) {
+        // Skip duplicate product names on Google Sheets
+        continue;
+      }
+      if (normName) {
+        seenProductNames.add(normName);
+      }
 
       const effectiveSku = sku || `SKU-${String(i).padStart(3, '0')}`;
       restoredProducts.push({

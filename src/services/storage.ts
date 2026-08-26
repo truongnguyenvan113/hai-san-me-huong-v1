@@ -227,6 +227,40 @@ export const INITIAL_PAYMENTS: PaymentTransaction[] = [];
 
 export const INITIAL_AUDIT_LOGS: AuditLog[] = [];
 
+export function normalizeProductName(name: string): string {
+  return (name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+export function deduplicateProductsList(products: Product[]): Product[] {
+  const map = new Map<string, Product>();
+  for (const p of products) {
+    if (!p || !p.product_name) continue;
+    const normName = normalizeProductName(p.product_name);
+    if (!normName) continue;
+    if (!map.has(normName)) {
+      map.set(normName, p);
+    } else {
+      // Merge details to retain richest information
+      const existing = map.get(normName)!;
+      map.set(normName, {
+        ...existing,
+        sku: existing.sku || p.sku,
+        category: existing.category && existing.category !== 'Hải sản' ? existing.category : p.category || existing.category,
+        size: existing.size || p.size,
+        origin: existing.origin || p.origin,
+        unit: existing.unit || p.unit,
+        default_price: existing.default_price || p.default_price,
+        description: existing.description || p.description,
+        status: existing.status === 'ACTIVE' || p.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
 class StorageService {
   private get<T>(key: string, defaultValue: T): T {
     try {
@@ -265,6 +299,13 @@ class StorageService {
 
     if (!localStorage.getItem(STORAGE_KEYS.PRODUCTS)) {
       this.set(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    } else {
+      // Deduplicate existing products on init
+      const savedProds = this.get<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+      const dedupedProds = deduplicateProductsList(savedProds);
+      if (dedupedProds.length !== savedProds.length) {
+        this.set(STORAGE_KEYS.PRODUCTS, dedupedProds);
+      }
     }
     if (!localStorage.getItem(STORAGE_KEYS.CUSTOMERS)) {
       this.set(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
@@ -367,27 +408,63 @@ class StorageService {
 
   // Products
   public getProducts(): Product[] {
-    return this.get<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const raw = this.get<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const deduped = deduplicateProductsList(raw);
+    if (deduped.length !== raw.length) {
+      this.set(STORAGE_KEYS.PRODUCTS, deduped);
+    }
+    return deduped;
   }
 
   public saveProducts(products: Product[]): void {
-    this.set(STORAGE_KEYS.PRODUCTS, products);
+    const deduped = deduplicateProductsList(products);
+    this.set(STORAGE_KEYS.PRODUCTS, deduped);
   }
 
   public addProduct(product: Product): void {
     const products = this.getProducts();
-    products.unshift(product);
-    this.saveProducts(products);
-    this.logAudit('CREATE_PRODUCT', 'PRODUCT', product.product_id, `Thêm sản phẩm mới: ${product.product_name}`);
+    const normName = normalizeProductName(product.product_name);
+    const normSku = (product.sku || '').trim().toLowerCase();
+
+    const existingIndex = products.findIndex(
+      (p) => normalizeProductName(p.product_name) === normName || (normSku && (p.sku || '').trim().toLowerCase() === normSku)
+    );
+
+    if (existingIndex !== -1) {
+      // Update existing product without creating duplicates
+      products[existingIndex] = {
+        ...products[existingIndex],
+        ...product,
+        product_name: product.product_name || products[existingIndex].product_name,
+        category: product.category && product.category !== 'Hải sản' ? product.category : products[existingIndex].category,
+        size: product.size || products[existingIndex].size,
+        origin: product.origin || products[existingIndex].origin,
+        default_price: product.default_price || products[existingIndex].default_price,
+        unit: product.unit || products[existingIndex].unit,
+      };
+      this.saveProducts(products);
+      this.logAudit('UPDATE_PRODUCT', 'PRODUCT', products[existingIndex].product_id, `Cập nhật thông tin hải sản: ${products[existingIndex].product_name}`);
+    } else {
+      products.unshift(product);
+      this.saveProducts(products);
+      this.logAudit('CREATE_PRODUCT', 'PRODUCT', product.product_id, `Thêm hải sản mới: ${product.product_name}`);
+    }
   }
 
   public updateProduct(product: Product): void {
     const products = this.getProducts();
-    const index = products.findIndex(p => p.product_id === product.product_id);
+    const normName = normalizeProductName(product.product_name);
+    const index = products.findIndex(
+      (p) => p.product_id === product.product_id || normalizeProductName(p.product_name) === normName
+    );
+
     if (index !== -1) {
-      products[index] = product;
+      products[index] = {
+        ...products[index],
+        ...product,
+      };
       this.saveProducts(products);
-      this.logAudit('UPDATE_PRODUCT', 'PRODUCT', product.product_id, `Cập nhật sản phẩm: ${product.product_name}`);
+      this.logAudit('UPDATE_PRODUCT', 'PRODUCT', products[index].product_id, `Cập nhật sản phẩm: ${products[index].product_name}`);
     }
   }
 
