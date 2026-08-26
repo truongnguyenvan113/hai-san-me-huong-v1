@@ -10,7 +10,7 @@ import {
   BatchItemSummary
 } from '../types';
 import { storage } from '../services/storage';
-import { autoSyncAll, SyncStats } from '../services/googleSheets';
+import { autoSyncAll, pullAndRestoreFromGoogleSheets, exportSettingsToGoogleSheets, SyncStats, RestoreStats } from '../services/googleSheets';
 import { getAccessToken } from '../services/googleAuth';
 
 export type ActiveTab = 
@@ -69,6 +69,8 @@ interface AppContextType {
   autoSyncEnabled: boolean;
   setAutoSyncEnabled: (enabled: boolean) => void;
   triggerSyncNow: () => Promise<boolean>;
+  pullFromSheets: () => Promise<RestoreStats | null>;
+  exportSettingsToSheets: () => Promise<boolean>;
   setSpreadsheetInfo: (id: string, url: string) => void;
 
   // Modals & UI States
@@ -266,7 +268,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         storage.getOrders(),
         storage.getBatches(),
         storage.getCustomers(),
-        storage.getProducts()
+        storage.getProducts(),
+        storage.getSettings()
       );
 
       if (result) {
@@ -287,6 +290,65 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const triggerSyncNow = async (): Promise<boolean> => {
     return await executeAutoSync(true);
+  };
+
+  // REVERSE SYNC / PULL from Google Sheets back into app
+  const pullFromSheets = async (): Promise<RestoreStats | null> => {
+    const activeSpreadsheetId = spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    if (!activeSpreadsheetId) {
+      addToast('error', 'Chưa có Google Sheets', 'Vui lòng liên kết tệp Google Sheets trước khi tải dữ liệu');
+      return null;
+    }
+
+    const token = await getAccessToken();
+    if (!token) {
+      setSyncStatus('UNAUTHENTICATED');
+      addToast('warning', 'Chưa đăng nhập Google', 'Vui lòng kết nối tài khoản Google để tải dữ liệu');
+      return null;
+    }
+
+    try {
+      setSyncStatus('SYNCING');
+      const restoreStats = await pullAndRestoreFromGoogleSheets(activeSpreadsheetId);
+      refreshData();
+      setSyncStatus('SYNCED');
+      addToast(
+        'success',
+        'Đã đồng bộ ngược từ Sheets thành công',
+        `Đã nạp: ${restoreStats.ordersCount} đơn hàng, ${restoreStats.batchesCount} đợt gom, ${restoreStats.customersCount} cư dân, ${restoreStats.productsCount} hải sản & Cấu hình hệ thống!`
+      );
+      return restoreStats;
+    } catch (err: any) {
+      console.error('Lỗi khi nạp dữ liệu từ Google Sheets:', err);
+      setSyncStatus('ERROR');
+      addToast('error', 'Lỗi đồng bộ từ Sheets', err?.message || 'Không thể đọc dữ liệu từ tệp Google Sheets');
+      return null;
+    }
+  };
+
+  // Export only settings to Google Sheets
+  const exportSettingsToSheets = async (): Promise<boolean> => {
+    const activeSpreadsheetId = spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    if (!activeSpreadsheetId) {
+      addToast('error', 'Chưa có Google Sheets', 'Vui lòng liên kết tệp Google Sheets trước khi xuất cấu hình');
+      return false;
+    }
+
+    const token = await getAccessToken();
+    if (!token) {
+      setSyncStatus('UNAUTHENTICATED');
+      addToast('warning', 'Chưa đăng nhập Google', 'Vui lòng kết nối tài khoản Google để xuất cấu hình');
+      return false;
+    }
+
+    try {
+      await exportSettingsToGoogleSheets(activeSpreadsheetId, storage.getSettings());
+      addToast('success', 'Đã lưu cấu hình lên Google Sheets', 'Tab "Cấu Hình Hệ Thống" đã được cập nhật!');
+      return true;
+    } catch (err: any) {
+      addToast('error', 'Lỗi xuất cấu hình', err?.message || 'Không thể ghi cấu hình lên Google Sheets');
+      return false;
+    }
   };
 
   // Watch for data updates and trigger debounced sync
@@ -460,6 +522,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           if (enabled) executeAutoSync();
         },
         triggerSyncNow,
+        pullFromSheets,
+        exportSettingsToSheets,
         setSpreadsheetInfo,
         isCreateOrderOpen,
         setIsCreateOrderOpen,

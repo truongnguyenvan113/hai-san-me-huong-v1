@@ -198,13 +198,27 @@ export interface StoreSettings {
   owner_name: string;
   phone: string;
   hotline?: string;
-  condo_name: string; // Chung cư Green Bay, Vinhomes Smart City...
+  condo_name: string; // Chung cư Green Bay, Vinhomes Smart City, Geleximco 897 Giải Phóng...
   address: string;
+  
+  // Bank 1 (Tài khoản chính)
   bank_name: string;
   bank_account: string;
   bank_account_name: string;
+  bank_bin?: string;
+  
+  // Bank 2 (Tài khoản phụ)
+  bank_name_2?: string;
+  bank_account_2?: string;
+  bank_account_name_2?: string;
+  bank_bin_2?: string;
+
+  // Selected default bank for receiving payments ('BANK_1' | 'BANK_2')
+  active_bank_account?: 'BANK_1' | 'BANK_2';
+  
   bank_owner?: string;
-  bank_qr_template?: string; // VietQR format
+  bank_qr_template?: 'compact2' | 'compact' | 'qr_only' | 'print'; // VietQR format
+  qr_size?: 'large' | 'medium' | 'compact';
   invoice_footer_note?: string;
   slogan?: string;
   default_shipping_fee: number;

@@ -1,4 +1,5 @@
-import { BatchStatus, OrderStatus, PaymentStatus, DeliveryStatus } from '../types';
+import { BatchStatus, OrderStatus, PaymentStatus, DeliveryStatus, StoreSettings } from '../types';
+import { getBankBin, getBankByCodeOrName } from './banks';
 
 export const formatCurrency = (amount: number | undefined | null): string => {
   if (amount === undefined || amount === null || isNaN(amount)) return '0 ₫';
@@ -238,37 +239,57 @@ export const formatVietQRMemo = (room: string = '', building: string = ''): stri
   return cleanRoom ? `Căn ${cleanRoom} thanh toán tiền hải sản` : 'Thanh toán tiền hải sản';
 };
 
-// Generate VietQR Quick Link
+// Helper to resolve active bank account info (Bank 1 or Bank 2) from settings
+export const getActiveBankAccountInfo = (
+  settings: StoreSettings,
+  bankChoice?: 'BANK_1' | 'BANK_2'
+) => {
+  const chosen = bankChoice || settings.active_bank_account || 'BANK_1';
+
+  if (chosen === 'BANK_2' && settings.bank_account_2) {
+    const bankObj = getBankByCodeOrName(settings.bank_name_2 || 'ABBANK');
+    return {
+      bankCode: bankObj.code,
+      bankName: settings.bank_name_2 || bankObj.shortName,
+      bankShortName: bankObj.shortName,
+      accountNumber: settings.bank_account_2,
+      accountName: settings.bank_account_name_2 || settings.bank_owner || 'DANG THI VAN',
+      bin: settings.bank_bin_2 || bankObj.bin,
+      isSecondary: true,
+      label: `NH 2: ${bankObj.shortName} - ${settings.bank_account_2}`,
+    };
+  }
+
+  // Default: Bank 1
+  const bankObj = getBankByCodeOrName(settings.bank_name || 'ABBANK');
+  return {
+    bankCode: bankObj.code,
+    bankName: settings.bank_name || bankObj.shortName,
+    bankShortName: bankObj.shortName,
+    accountNumber: settings.bank_account || '',
+    accountName: settings.bank_account_name || settings.bank_owner || 'DANG THI VAN',
+    bin: settings.bank_bin || bankObj.bin,
+    isSecondary: false,
+    label: `NH 1: ${bankObj.shortName} - ${settings.bank_account}`,
+  };
+};
+
+// Generate VietQR Quick Link with high-definition rendering and full bank support
 export const getVietQRUrl = (
-  bankName: string = 'Vietcombank',
+  bankNameOrBin: string = 'ABBANK',
   accountNumber: string = '',
   accountName: string = '',
   amount: number = 0,
-  description: string = ''
+  description: string = '',
+  template: 'compact2' | 'compact' | 'qr_only' | 'print' = 'compact2'
 ): string => {
   if (!accountNumber) return '';
-  const bankBinMap: Record<string, string> = {
-    vietcombank: '970436',
-    vcb: '970436',
-    techcombank: '970407',
-    tcb: '970407',
-    mbbank: '970422',
-    mb: '970422',
-    vietinbank: '970415',
-    bidv: '970418',
-    acb: '970416',
-    tpbank: '970423',
-    vpbank: '970432',
-    vib: '970441',
-    sacombank: '970403',
-  };
-
-  const cleanBank = (bankName || '').toLowerCase().replace(/[\s\-_]+/g, '');
-  const bin = bankBinMap[cleanBank] || '970436'; // default VCB
+  
+  // Resolve BIN code (check if already a 6-digit BIN or look up from bank name)
+  const bin = /^\d{6}$/.test(bankNameOrBin) ? bankNameOrBin : getBankBin(bankNameOrBin);
   const encodedDesc = encodeURIComponent(description || '');
   const encodedAccName = encodeURIComponent(accountName || '');
+  const cleanAmount = Math.max(0, Math.round(amount || 0));
 
-  return `https://img.vietqr.io/image/${bin}-${accountNumber}-compact.png?amount=${Math.round(
-    amount || 0
-  )}&addInfo=${encodedDesc}&accountName=${encodedAccName}`;
+  return `https://img.vietqr.io/image/${bin}-${accountNumber}-${template}.png?amount=${cleanAmount}&addInfo=${encodedDesc}&accountName=${encodedAccName}`;
 };

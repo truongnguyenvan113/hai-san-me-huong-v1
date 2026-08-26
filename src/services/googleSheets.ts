@@ -1,5 +1,6 @@
-import { Order, Batch, Customer, Product } from '../types';
+import { Order, Batch, Customer, Product, StoreSettings } from '../types';
 import { getAccessToken } from './googleAuth';
+import { storage } from './storage';
 
 export interface SyncStats {
   ordersCount: number;
@@ -8,16 +9,27 @@ export interface SyncStats {
   productsCount: number;
   weighingCount: number;
   financeCount: number;
+  settingsSynced?: boolean;
   syncedAt: string;
 }
 
-const SHEET_NAMES = {
+export interface RestoreStats {
+  ordersCount: number;
+  batchesCount: number;
+  customersCount: number;
+  productsCount: number;
+  settingsRestored: boolean;
+  restoredAt: string;
+}
+
+export const SHEET_NAMES = {
   ORDERS: 'Đơn Hàng Chi Tiết',
   BATCHES: 'Đợt Gom Hàng',
   CUSTOMERS: 'Danh Bạ Cư Dân',
   PRODUCTS: 'Danh Mục Hải Sản',
   WEIGHING: 'Cân Chia Thực Tế',
   FINANCE: 'Sổ Nợ & Doanh Thu',
+  SETTINGS: 'Cấu Hình Hệ Thống',
 };
 
 // Helper: Make authenticated request to Google Sheets API
@@ -45,7 +57,7 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}) {
   return res.json();
 }
 
-// 1. Create a new Spreadsheet dedicated for Seafood Management
+// 1. Create a new Spreadsheet dedicated for Seafood Management (7 Tabs)
 export async function createSeafoodSpreadsheet(
   title: string = 'Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư'
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
@@ -60,6 +72,7 @@ export async function createSeafoodSpreadsheet(
       { properties: { title: SHEET_NAMES.PRODUCTS, gridProperties: { frozenRowCount: 1 } } },
       { properties: { title: SHEET_NAMES.WEIGHING, gridProperties: { frozenRowCount: 1 } } },
       { properties: { title: SHEET_NAMES.FINANCE, gridProperties: { frozenRowCount: 1 } } },
+      { properties: { title: SHEET_NAMES.SETTINGS, gridProperties: { frozenRowCount: 1 } } },
     ],
   };
 
@@ -74,7 +87,7 @@ export async function createSeafoodSpreadsheet(
   };
 }
 
-// 2. Ensure all required sheet tabs exist in an existing spreadsheet
+// 2. Ensure all 7 required sheet tabs exist in an existing spreadsheet
 export async function ensureSheetTabsExist(spreadsheetId: string) {
   const meta = await fetchSheetsApi(`/${spreadsheetId}`);
   const existingTitles = (meta.sheets || []).map((s: any) => s.properties?.title);
@@ -99,11 +112,6 @@ export async function ensureSheetTabsExist(spreadsheetId: string) {
     });
   }
 }
-
-// Format VND currency string
-const formatCurrency = (val: number) => {
-  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val || 0);
-};
 
 // Translate status to Vietnamese labels
 const translateOrderStatus = (status: string) => {
@@ -140,13 +148,16 @@ const translateDeliveryStatus = (status: string) => {
   return map[status] || status;
 };
 
-// 3. Prepare data rows for each sheet tab
+// 3. Prepare data rows for each sheet tab (Including Tab 7: Settings)
 export function prepareSheetData(
   orders: Order[],
   batches: Batch[],
   customers: Customer[],
-  products: Product[]
+  products: Product[],
+  settingsInput?: StoreSettings
 ) {
+  const settings = settingsInput || storage.getSettings();
+
   // Tab 1: Đơn Hàng Chi Tiết
   const ordersHeader = [
     'Mã Đơn',
@@ -307,7 +318,7 @@ export function prepareSheetData(
     p.description || '',
   ]);
 
-  // Tab 5: Cân Chia Hàng Thực Tế (Phân bổ cho từng căn hộ)
+  // Tab 5: Cân Chia Hàng Thực Tế
   const weighingHeader = [
     'Mã Đơn',
     'Tòa & Phòng',
@@ -381,6 +392,33 @@ export function prepareSheetData(
       o.delivery_note || o.note || '',
     ]);
 
+  // Tab 7: Cấu Hình Hệ Thống (Store Settings & 2-Bank Account Config)
+  const settingsHeader = ['Mã Cấu Hình / Thuộc Tính', 'Giá Trị Thiết Lập', 'Mô Tả & Hướng Dẫn Nghiệp Vụ'];
+  const settingsRows = [
+    ['STORE_NAME', settings.store_name || '', 'Tên cửa hàng hải sản hiển thị trên phiếu in & tiêu đề'],
+    ['OWNER_NAME', settings.owner_name || '', 'Tên chủ shop / cư dân đại diện'],
+    ['PHONE', settings.phone || '', 'Số điện thoại di động chính'],
+    ['HOTLINE', settings.hotline || settings.phone || '', 'Hotline liên hệ in nổi bật trên phiếu A4'],
+    ['CONDO_NAME', settings.condo_name || '', 'Tên khu chung cư phục vụ gom đơn'],
+    ['ADDRESS', settings.address || '', 'Địa chỉ tập kết & giao nhận hải sản'],
+    ['BANK_1_NAME', settings.bank_name || 'ABBANK', 'Ngân hàng 1 (Tài khoản chính, VD: ABBANK, BIDV, Vietcombank)'],
+    ['BANK_1_ACCOUNT', settings.bank_account || '', 'Số tài khoản Ngân hàng 1'],
+    ['BANK_1_ACCOUNT_NAME', settings.bank_account_name || settings.bank_owner || '', 'Tên chủ tài khoản Ngân hàng 1'],
+    ['BANK_1_BIN', settings.bank_bin || '970425', 'Mã BIN VietQR Ngân hàng 1'],
+    ['BANK_2_NAME', settings.bank_name_2 || 'BIDV', 'Ngân hàng 2 (Tài khoản phụ)'],
+    ['BANK_2_ACCOUNT', settings.bank_account_2 || '', 'Số tài khoản Ngân hàng 2'],
+    ['BANK_2_ACCOUNT_NAME', settings.bank_account_name_2 || settings.bank_account_name || '', 'Tên chủ tài khoản Ngân hàng 2'],
+    ['BANK_2_BIN', settings.bank_bin_2 || '970418', 'Mã BIN VietQR Ngân hàng 2'],
+    ['ACTIVE_BANK_ACCOUNT', settings.active_bank_account || 'BANK_1', 'Tài khoản nhận tiền mặc định được chọn (BANK_1 hoặc BANK_2)'],
+    ['BANK_QR_TEMPLATE', settings.bank_qr_template || 'compact2', 'Mẫu hiển thị VietQR (compact2, compact, qr_only, print)'],
+    ['QR_SIZE', settings.qr_size || 'large', 'Kích thước in mã VietQR (large = To rõ nét, medium = Vừa)'],
+    ['SHOW_VIETQR', String(settings.show_vietqr !== false), 'Bật / Tắt tạo và in mã VietQR tự động (true / false)'],
+    ['INVOICE_FOOTER_NOTE', settings.invoice_footer_note || '', 'Ghi chú dặn dò bảo quản ở chân phiếu in dán bao bì'],
+    ['SLOGAN', settings.slogan || '', 'Khẩu hiệu bán hàng'],
+    ['DEFAULT_SHIPPING_FEE', String(settings.default_shipping_fee || 0), 'Phí ship nội bộ chung cư mặc định (VNĐ)'],
+    ['LAST_SYNC_TIME', new Date().toISOString(), 'Thời gian sao lưu cấu hình lên Google Sheets'],
+  ];
+
   return {
     [SHEET_NAMES.ORDERS]: { header: ordersHeader, rows: ordersRows },
     [SHEET_NAMES.BATCHES]: { header: batchesHeader, rows: batchesRows },
@@ -388,23 +426,25 @@ export function prepareSheetData(
     [SHEET_NAMES.PRODUCTS]: { header: productsHeader, rows: productsRows },
     [SHEET_NAMES.WEIGHING]: { header: weighingHeader, rows: weighingRows },
     [SHEET_NAMES.FINANCE]: { header: financeHeader, rows: financeRows },
+    [SHEET_NAMES.SETTINGS]: { header: settingsHeader, rows: settingsRows },
   };
 }
 
-// 4. Sync all categories to the designated Spreadsheet Tabs
+// 4. Sync all 7 categories (including Settings) to the designated Spreadsheet Tabs
 export async function syncAllToGoogleSheets(
   spreadsheetId: string,
   orders: Order[],
   batches: Batch[],
   customers: Customer[],
-  products: Product[]
+  products: Product[],
+  settings?: StoreSettings
 ): Promise<SyncStats> {
-  // Ensure tabs exist first
+  // Ensure all 7 tabs exist first
   await ensureSheetTabsExist(spreadsheetId);
 
-  const preparedData = prepareSheetData(orders, batches, customers, products);
+  const preparedData = prepareSheetData(orders, batches, customers, products, settings);
 
-  // Clear and update all 6 sheets
+  // Clear and update all 7 sheets
   const valueRanges = Object.entries(preparedData).map(([sheetTitle, { header, rows }]) => {
     return {
       range: `${sheetTitle}!A1:Z${Math.max(rows.length + 10, 50)}`,
@@ -436,16 +476,18 @@ export async function syncAllToGoogleSheets(
     productsCount: products.length,
     weighingCount: preparedData[SHEET_NAMES.WEIGHING].rows.length,
     financeCount: preparedData[SHEET_NAMES.FINANCE].rows.length,
+    settingsSynced: true,
     syncedAt: now,
   };
 }
 
-// 5. Automated Sync Engine (creates sheet if missing, updates all 6 tabs)
+// 5. Automated Sync Engine (creates sheet if missing, updates all 7 tabs)
 export async function autoSyncAll(
   orders: Order[],
   batches: Batch[],
   customers: Customer[],
   products: Product[],
+  settings?: StoreSettings,
   options?: { title?: string }
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string; stats: SyncStats } | null> {
   const token = await getAccessToken();
@@ -473,7 +515,8 @@ export async function autoSyncAll(
     orders,
     batches,
     customers,
-    products
+    products,
+    settings
   );
 
   localStorage.setItem('seafood_sheets_last_sync', JSON.stringify(stats));
@@ -485,3 +528,268 @@ export async function autoSyncAll(
   };
 }
 
+// 6. REVERSE SYNC / PULL MECHANISM (Synchronize backwards from Google Sheets to App)
+export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Promise<RestoreStats> {
+  if (!spreadsheetId) {
+    throw new Error('Chưa cung cấp ID tệp Google Sheets để nạp dữ liệu');
+  }
+
+  // 1. Fetch values from all tabs
+  const ranges = [
+    `${SHEET_NAMES.ORDERS}!A1:Z500`,
+    `${SHEET_NAMES.BATCHES}!A1:Z500`,
+    `${SHEET_NAMES.CUSTOMERS}!A1:Z500`,
+    `${SHEET_NAMES.PRODUCTS}!A1:Z500`,
+    `${SHEET_NAMES.SETTINGS}!A1:Z50`,
+  ];
+
+  const response = await fetchSheetsApi(
+    `/${spreadsheetId}/values:batchGet?${ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join('&')}`
+  );
+
+  const valueRanges = response.valueRanges || [];
+  const getSheetRows = (sheetName: string): any[][] => {
+    const found = valueRanges.find((vr: any) => vr.range && vr.range.startsWith(`'${sheetName}'`) || vr.range?.startsWith(sheetName));
+    return (found && found.values) || [];
+  };
+
+  // Parse Settings Tab
+  const settingsRows = getSheetRows(SHEET_NAMES.SETTINGS);
+  let restoredSettings: Partial<StoreSettings> = {};
+  let settingsRestored = false;
+
+  if (settingsRows.length > 1) {
+    const currentSettings = storage.getSettings();
+    const configMap: Record<string, string> = {};
+    for (let i = 1; i < settingsRows.length; i++) {
+      const row = settingsRows[i];
+      if (row[0]) {
+        configMap[String(row[0]).trim()] = row[1] !== undefined ? String(row[1]).trim() : '';
+      }
+    }
+
+    restoredSettings = {
+      ...currentSettings,
+      store_name: configMap['STORE_NAME'] || currentSettings.store_name,
+      owner_name: configMap['OWNER_NAME'] || currentSettings.owner_name,
+      phone: configMap['PHONE'] || currentSettings.phone,
+      hotline: configMap['HOTLINE'] || currentSettings.hotline,
+      condo_name: configMap['CONDO_NAME'] || currentSettings.condo_name,
+      address: configMap['ADDRESS'] || currentSettings.address,
+      bank_name: configMap['BANK_1_NAME'] || currentSettings.bank_name,
+      bank_account: configMap['BANK_1_ACCOUNT'] || currentSettings.bank_account,
+      bank_account_name: configMap['BANK_1_ACCOUNT_NAME'] || currentSettings.bank_account_name,
+      bank_bin: configMap['BANK_1_BIN'] || currentSettings.bank_bin,
+      bank_name_2: configMap['BANK_2_NAME'] || currentSettings.bank_name_2,
+      bank_account_2: configMap['BANK_2_ACCOUNT'] || currentSettings.bank_account_2,
+      bank_account_name_2: configMap['BANK_2_ACCOUNT_NAME'] || currentSettings.bank_account_name_2,
+      bank_bin_2: configMap['BANK_2_BIN'] || currentSettings.bank_bin_2,
+      active_bank_account: (configMap['ACTIVE_BANK_ACCOUNT'] as any) || currentSettings.active_bank_account || 'BANK_1',
+      bank_qr_template: (configMap['BANK_QR_TEMPLATE'] as any) || currentSettings.bank_qr_template || 'compact2',
+      qr_size: (configMap['QR_SIZE'] as any) || currentSettings.qr_size || 'large',
+      show_vietqr: configMap['SHOW_VIETQR'] !== undefined ? configMap['SHOW_VIETQR'] === 'true' : currentSettings.show_vietqr,
+      invoice_footer_note: configMap['INVOICE_FOOTER_NOTE'] || currentSettings.invoice_footer_note,
+      slogan: configMap['SLOGAN'] || currentSettings.slogan,
+      default_shipping_fee: configMap['DEFAULT_SHIPPING_FEE'] ? parseFloat(configMap['DEFAULT_SHIPPING_FEE']) || 0 : currentSettings.default_shipping_fee,
+    };
+
+    storage.saveSettings(restoredSettings as StoreSettings);
+    settingsRestored = true;
+  }
+
+  // Parse Products Tab
+  const productsRows = getSheetRows(SHEET_NAMES.PRODUCTS);
+  const restoredProducts: Product[] = [];
+  if (productsRows.length > 1) {
+    for (let i = 1; i < productsRows.length; i++) {
+      const r = productsRows[i];
+      if (r[0] || r[1]) {
+        restoredProducts.push({
+          product_id: `PROD-${r[0] || i}`,
+          sku: r[0] || `SKU-${i}`,
+          product_name: r[1] || 'Hải Sản',
+          category: r[2] || 'Hải sản',
+          size: r[3] || '',
+          origin: r[4] || '',
+          unit: r[5] || 'kg',
+          default_price: parseFloat(String(r[6]).replace(/[^\d.]/g, '')) || 0,
+          status: r[7] === 'Tạm ngưng' ? 'INACTIVE' : 'ACTIVE',
+          description: r[8] || '',
+        });
+      }
+    }
+  }
+
+  // Parse Customers Tab
+  const customersRows = getSheetRows(SHEET_NAMES.CUSTOMERS);
+  const restoredCustomers: Customer[] = [];
+  if (customersRows.length > 1) {
+    for (let i = 1; i < customersRows.length; i++) {
+      const r = customersRows[i];
+      if (r[0] || r[1]) {
+        restoredCustomers.push({
+          customer_id: `CUST-${r[0] || i}`,
+          customer_code: r[0] || `CD-${i}`,
+          name: r[1] || 'Cư dân',
+          phone: r[2] || '',
+          building: r[3] || 'Tòa A',
+          room: r[4] || '101',
+          address: r[5] || '',
+          note: r[9] || '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  // Parse Batches Tab
+  const batchesRows = getSheetRows(SHEET_NAMES.BATCHES);
+  const restoredBatches: Batch[] = [];
+  if (batchesRows.length > 1) {
+    for (let i = 1; i < batchesRows.length; i++) {
+      const r = batchesRows[i];
+      if (r[0] || r[1]) {
+        restoredBatches.push({
+          batch_id: `BATCH-${r[0] || i}`,
+          batch_code: r[0] || `BATCH-${i}`,
+          batch_name: r[1] || 'Đợt Gom Hải Sản',
+          batch_date: r[2] || new Date().toISOString().slice(0, 10),
+          delivery_date: r[3] || new Date().toISOString().slice(0, 10),
+          status: 'COLLECTING',
+          supplier_info: { location: r[5] || 'Quảng Ninh' },
+          notes: r[9] || '',
+          created_at: r[2] || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  // Parse Orders Tab
+  const ordersRows = getSheetRows(SHEET_NAMES.ORDERS);
+  const restoredOrders: Order[] = [];
+  if (ordersRows.length > 1) {
+    for (let i = 1; i < ordersRows.length; i++) {
+      const r = ordersRows[i];
+      if (r[0]) {
+        const orderCode = String(r[0]);
+        const custName = r[1] || 'Cư dân';
+        const custPhone = r[2] || '';
+        const building = r[3] || '';
+        const room = r[4] || '';
+        const batchName = r[5] || '';
+        const deliveryDate = r[6] || '';
+        const itemsSummaryStr = r[7] || '';
+        const total = parseFloat(String(r[8]).replace(/[^\d.]/g, '')) || 0;
+        const paid = parseFloat(String(r[9]).replace(/[^\d.]/g, '')) || 0;
+        const debt = parseFloat(String(r[10]).replace(/[^\d.]/g, '')) || 0;
+        const statusText = r[11] || '';
+        const deliveryStatusText = r[12] || '';
+        const paymentMethod = r[14] || 'QR';
+        const note = r[15] || '';
+        const createdAt = r[16] || new Date().toISOString();
+
+        // Parse items back from summary string if available
+        const parsedItems = (itemsSummaryStr ? itemsSummaryStr.split(';') : []).map((itemSeg: string, idx: number) => {
+          const clean = itemSeg.trim();
+          return {
+            order_item_id: `ITEM-${orderCode}-${idx + 1}`,
+            order_id: `ORD-${orderCode}`,
+            product_id: `PROD-${idx + 1}`,
+            product_name: clean.split(':')[0]?.trim() || 'Hải sản',
+            quantity_ordered: 1,
+            unit: 'kg' as const,
+            estimated_price: total,
+            subtotal: total,
+            status: 'PENDING' as const,
+          };
+        });
+
+        restoredOrders.push({
+          order_id: `ORD-${orderCode}`,
+          order_code: orderCode,
+          customer_id: `CUST-${room || orderCode}`,
+          customer_name: custName,
+          customer_phone: custPhone,
+          customer_building: building,
+          customer_room: room,
+          batch_id: `BATCH-ACTIVE`,
+          batch_name: batchName,
+          order_date: createdAt.slice(0, 10),
+          delivery_date: deliveryDate,
+          items: parsedItems.length > 0 ? parsedItems : [
+            {
+              order_item_id: `ITEM-${orderCode}-1`,
+              order_id: `ORD-${orderCode}`,
+              product_id: 'PROD-1',
+              product_name: 'Hải Sản Tươi',
+              quantity_ordered: 1,
+              unit: 'kg' as const,
+              estimated_price: total,
+              subtotal: total,
+              status: 'PENDING' as const,
+            },
+          ],
+          subtotal: total,
+          discount: 0,
+          shipping_fee: 0,
+          total,
+          paid_amount: paid,
+          debt_amount: debt,
+          status: statusText.includes('hủy') ? 'CANCELLED' : statusText.includes('giao') ? 'DELIVERED' : 'CONFIRMED',
+          payment_status: paid >= total && total > 0 ? 'PAID' : paid > 0 ? 'PARTIAL' : 'UNPAID',
+          delivery_status: deliveryStatusText.includes('giao xong') || deliveryStatusText.includes('Đã giao') ? 'DELIVERED' : 'PENDING',
+          payment_method: (paymentMethod as any) || 'QR',
+          note,
+          created_at: createdAt,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+  }
+
+  // Save parsed data to storage if any rows were found
+  if (restoredProducts.length > 0) {
+    (storage as any).set('seafood_app_products_v1', restoredProducts);
+  }
+  if (restoredCustomers.length > 0) {
+    (storage as any).set('seafood_app_customers_v1', restoredCustomers);
+  }
+  if (restoredBatches.length > 0) {
+    (storage as any).set('seafood_app_batches_v1', restoredBatches);
+  }
+  if (restoredOrders.length > 0) {
+    (storage as any).set('seafood_app_orders_v1', restoredOrders);
+  }
+
+  const now = new Date().toISOString();
+  return {
+    ordersCount: restoredOrders.length,
+    batchesCount: restoredBatches.length,
+    customersCount: restoredCustomers.length,
+    productsCount: restoredProducts.length,
+    settingsRestored,
+    restoredAt: now,
+  };
+}
+
+// 7. Direct Settings Export & Import helpers
+export async function exportSettingsToGoogleSheets(
+  spreadsheetId: string,
+  settings: StoreSettings
+): Promise<boolean> {
+  await ensureSheetTabsExist(spreadsheetId);
+  const prepared = prepareSheetData([], [], [], [], settings);
+  const settingsData = prepared[SHEET_NAMES.SETTINGS];
+
+  await fetchSheetsApi(`/${spreadsheetId}/values/${SHEET_NAMES.SETTINGS}!A1:C50?valueInputOption=USER_ENTERED`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      range: `${SHEET_NAMES.SETTINGS}!A1:C${settingsData.rows.length + 1}`,
+      values: [settingsData.header, ...settingsData.rows],
+    }),
+  });
+
+  return true;
+}

@@ -28,11 +28,23 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   hotline: '0916988982 ( Đặng Thị Vân | GSB-1004 )',
   condo_name: 'Chung cư Geleximco 897 Giải Phóng',
   address: 'Geleximco Southern Star, 897 Giải Phóng, Giáp Bát, Hoàng Mai, Hà Nội',
-  bank_name: 'VIETCOMBANK',
+  
+  // Bank 1 (Chính) - Mặc định ABBANK
+  bank_name: 'ABBANK',
   bank_account: '9988776655',
   bank_account_name: 'DANG THI VAN',
+  bank_bin: '970425',
+  
+  // Bank 2 (Phụ) - Mặc định BIDV
+  bank_name_2: 'BIDV',
+  bank_account_2: '12400008899',
+  bank_account_name_2: 'DANG THI VAN',
+  bank_bin_2: '970418',
+  
+  active_bank_account: 'BANK_1',
   bank_owner: 'DANG THI VAN',
-  bank_qr_template: 'compact',
+  bank_qr_template: 'compact2',
+  qr_size: 'large',
   invoice_footer_note: 'Hải sản tươi sống đánh bắt trong ngày từ quê gửi lên. Quý cư dân vui lòng bảo quản ngăn đông hoặc chế biến ngay!',
   slogan: 'Hải sản tươi ngon mỗi ngày - Gom tận gốc, giao tận cửa phòng',
   default_shipping_fee: 0,
@@ -312,7 +324,19 @@ class StorageService {
     }
     merged.phone = merged.phone || merged.hotline || DEFAULT_SETTINGS.phone;
     merged.hotline = merged.hotline || merged.phone || DEFAULT_SETTINGS.hotline;
+    merged.bank_name = merged.bank_name || DEFAULT_SETTINGS.bank_name;
+    merged.bank_account = merged.bank_account || DEFAULT_SETTINGS.bank_account;
     merged.bank_account_name = merged.bank_account_name || merged.bank_owner || DEFAULT_SETTINGS.bank_account_name;
+    merged.bank_bin = merged.bank_bin || DEFAULT_SETTINGS.bank_bin;
+
+    merged.bank_name_2 = merged.bank_name_2 || DEFAULT_SETTINGS.bank_name_2;
+    merged.bank_account_2 = merged.bank_account_2 || DEFAULT_SETTINGS.bank_account_2;
+    merged.bank_account_name_2 = merged.bank_account_name_2 || merged.bank_account_name || DEFAULT_SETTINGS.bank_account_name_2;
+    merged.bank_bin_2 = merged.bank_bin_2 || DEFAULT_SETTINGS.bank_bin_2;
+
+    merged.active_bank_account = merged.active_bank_account || 'BANK_1';
+    merged.bank_qr_template = merged.bank_qr_template || 'compact2';
+    merged.qr_size = merged.qr_size || 'large';
     merged.bank_owner = merged.bank_owner || merged.bank_account_name || DEFAULT_SETTINGS.bank_owner;
     merged.slogan = merged.slogan || DEFAULT_SETTINGS.slogan;
     merged.show_vietqr = merged.show_vietqr !== undefined ? merged.show_vietqr : true;

@@ -17,6 +17,9 @@ import {
   Copy,
   Clock,
   ArrowRight,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  ShieldCheck,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
@@ -28,7 +31,10 @@ import {
 import {
   createSeafoodSpreadsheet,
   syncAllToGoogleSheets,
+  pullAndRestoreFromGoogleSheets,
   SyncStats,
+  RestoreStats,
+  SHEET_NAMES,
 } from '../../services/googleSheets';
 import { User } from 'firebase/auth';
 
@@ -46,6 +52,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     batches,
     customers,
     products,
+    settings,
     addToast,
     syncStatus,
     autoSyncEnabled,
@@ -55,11 +62,14 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     lastSyncStats,
     setSpreadsheetInfo,
     triggerSyncNow,
+    pullFromSheets,
+    refreshData,
   } = useApp();
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
   const [isCreatingSheet, setIsCreatingSheet] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -67,6 +77,8 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   const [showManualInput, setShowManualInput] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [showConfirmSync, setShowConfirmSync] = useState(false);
+  const [showConfirmPull, setShowConfirmPull] = useState(false);
+  const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
   // Initialize auth listener
   useEffect(() => {
@@ -84,7 +96,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Handle Google Sign In
+  // Handle Google Sign In & Auto-Reverse Sync check
   const handleSignIn = async () => {
     setIsAuthLoading(true);
     setErrorMessage(null);
@@ -114,22 +126,40 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     }
   };
 
-  // Handle Google Sign Out
-  const handleSignOut = async () => {
+  // Handle Google Sign Out with automatic reverse-sync protection to prevent data loss
+  const handleSignOutWithAutoSync = async (pullBeforeLogout = true) => {
+    setShowDisconnectDialog(false);
     try {
+      if (pullBeforeLogout && spreadsheetId) {
+        setIsPulling(true);
+        try {
+          await pullAndRestoreFromGoogleSheets(spreadsheetId);
+          refreshData();
+          addToast({
+            type: 'SUCCESS',
+            title: 'Đã bảo toàn dữ liệu',
+            message: 'Đã đồng bộ dữ liệu mới nhất từ Google Sheets về máy trước khi ngắt kết nối!',
+          });
+        } catch (pullErr) {
+          console.warn('Không thể kéo dữ liệu trước khi ngắt kết nối:', pullErr);
+        } finally {
+          setIsPulling(false);
+        }
+      }
+
       await googleLogout();
       setCurrentUser(null);
       addToast({
         type: 'INFO',
-        title: 'Đã đăng xuất Google',
-        message: 'Đã ngắt kết nối tài khoản Google Workspace.',
+        title: 'Đã ngắt kết nối Google',
+        message: 'Tài khoản Google Workspace đã được ngắt kết nối an toàn.',
       });
     } catch (err: any) {
       console.error(err);
     }
   };
 
-  // Create new spreadsheet
+  // Create new spreadsheet with all 7 tabs
   const handleCreateNewSpreadsheet = async () => {
     if (!currentUser) {
       await handleSignIn();
@@ -147,7 +177,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       addToast({
         type: 'SUCCESS',
         title: 'Đã tạo Google Sheet mới',
-        message: 'Bảng tính quản lý gom đơn với 6 tab chuyên biệt đã sẵn sàng.',
+        message: 'Bảng tính quản lý gom đơn với 7 tab chuyên biệt (kèm Cấu hình hệ thống) đã sẵn sàng.',
       });
 
       // Automatically run first sync
@@ -188,7 +218,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     });
   };
 
-  // Perform sync execution
+  // Perform sync execution (App -> Sheets)
   const executeSync = async (targetId = spreadsheetId) => {
     if (!targetId) {
       setErrorMessage('Chưa chọn hoặc chưa tạo Google Sheet để đồng bộ.');
@@ -205,15 +235,16 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
         orders,
         batches,
         customers,
-        products
+        products,
+        settings
       );
 
       localStorage.setItem('seafood_sheets_last_sync', JSON.stringify(stats));
 
       addToast({
         type: 'SUCCESS',
-        title: 'Đồng bộ Google Sheets thành công!',
-        message: `Đã cập nhật ${stats.ordersCount} đơn hàng, ${stats.batchesCount} đợt gom, ${stats.customersCount} cư dân và ${stats.weighingCount} mục phân bổ cân chia.`,
+        title: 'Đồng bộ Google Sheets 7 Tabs thành công!',
+        message: `Đã cập nhật ${stats.ordersCount} đơn hàng, ${stats.batchesCount} đợt gom, ${stats.customersCount} cư dân & Cấu hình hệ thống.`,
       });
     } catch (err: any) {
       console.error(err);
@@ -226,6 +257,27 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       });
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // Perform reverse sync execution (Sheets -> App)
+  const executePull = async () => {
+    if (!spreadsheetId) {
+      setErrorMessage('Chưa có Google Sheet để tải dữ liệu.');
+      return;
+    }
+
+    setIsPulling(true);
+    setErrorMessage(null);
+    setShowConfirmPull(false);
+
+    try {
+      await pullFromSheets();
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message || 'Không thể đồng bộ ngược từ Google Sheets');
+    } finally {
+      setIsPulling(false);
     }
   };
 
@@ -253,14 +305,14 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-lg sm:text-xl font-black tracking-tight text-white">
-                  Đồng Bộ Google Sheets
+                  Đồng Bộ Google Sheets 7 Tabs
                 </h2>
                 <span className="px-2 py-0.5 bg-emerald-400/20 text-emerald-300 text-[11px] font-bold rounded-full border border-emerald-400/30">
-                  Tự Động Thời Gian Thực
+                  2 Chiều & Cấu Hình
                 </span>
               </div>
               <p className="text-xs text-teal-100 font-medium">
-                Tự động tạo & lưu trữ dữ liệu theo 6 sheet tabs chuẩn nghiệp vụ hải sản
+                Tự động lưu trữ & phục hồi toàn bộ dữ liệu đơn hàng và cấu hình hệ thống
               </p>
             </div>
           </div>
@@ -268,7 +320,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
           <button
             id="close-sheets-sync-modal-btn"
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -295,13 +347,15 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                     <Sparkles className="w-4 h-4 text-amber-500 fill-amber-400" />
                     Tự Động Đồng Bộ Khi Có Thay Đổi
                   </span>
-                  <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                    syncStatus === 'SYNCING'
-                      ? 'bg-amber-100 text-amber-900 border border-amber-300 animate-pulse'
-                      : syncStatus === 'SYNCED'
-                      ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                      : 'bg-slate-100 text-slate-700'
-                  }`}>
+                  <span
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                      syncStatus === 'SYNCING'
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300 animate-pulse'
+                        : syncStatus === 'SYNCED'
+                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                        : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
                     {syncStatus === 'SYNCING'
                       ? '🔄 Đang lưu ngầm...'
                       : syncStatus === 'SYNCED'
@@ -310,7 +364,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-600">
-                  Hệ thống tự động tạo và cập nhật ngay lập tức lên 6 sheet tabs mỗi khi bạn tạo đợt mới, thêm đơn hàng, điều chỉnh cân thực tế hoặc thu tiền.
+                  Hệ thống tự động cập nhật ngay lập tức lên 7 sheet tabs (Đơn hàng, Đợt gom, Cư dân, Hải sản, Cân chia, Sổ nợ & Cấu hình 2 tài khoản ngân hàng) mỗi khi có thay đổi.
                 </p>
               </div>
 
@@ -369,10 +423,10 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 
                 <button
                   type="button"
-                  onClick={handleSignOut}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:text-rose-600 font-semibold bg-white border border-slate-200 rounded-lg hover:bg-rose-50 transition-colors self-start sm:self-center"
+                  onClick={() => setShowDisconnectDialog(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-600 hover:text-rose-600 font-semibold bg-white border border-slate-200 rounded-lg hover:bg-rose-50 transition-colors self-start sm:self-center cursor-pointer"
                 >
-                  <LogOut className="w-3.5 h-3.5" /> Đăng xuất
+                  <LogOut className="w-3.5 h-3.5" /> Ngắt kết nối
                 </button>
               </div>
             ) : (
@@ -380,12 +434,11 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                 <p className="text-xs text-slate-600">
                   Đăng nhập tài khoản Google để cấp quyền tạo và cập nhật các trang tính cho ứng dụng quản lý gom đơn hải sản.
                 </p>
-                {/* Official Material Google Sign In Button per Workspace skill guideline */}
                 <button
                   type="button"
                   onClick={handleSignIn}
                   disabled={isAuthLoading}
-                  className="w-full flex items-center justify-center gap-3 px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-bold text-sm rounded-xl border border-slate-300 shadow-xs transition-all active:scale-95 disabled:opacity-50"
+                  className="w-full flex items-center justify-center gap-3 px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-bold text-sm rounded-xl border border-slate-300 shadow-xs transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   <svg className="w-5 h-5" viewBox="0 0 48 48">
                     <path
@@ -435,7 +488,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                       <button
                         type="button"
                         onClick={copySheetUrl}
-                        className="p-1.5 bg-white hover:bg-slate-100 text-slate-600 rounded-lg border border-slate-200 transition-colors"
+                        className="p-1.5 bg-white hover:bg-slate-100 text-slate-600 rounded-lg border border-slate-200 transition-colors cursor-pointer"
                         title="Sao chép link Google Sheets"
                       >
                         {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
@@ -452,22 +505,47 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-xs pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowManualInput(!showManualInput)}
-                    className="text-slate-500 hover:text-slate-800 font-medium underline"
-                  >
-                    Đổi liên kết sang bảng tính khác
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCreateNewSpreadsheet}
-                    disabled={isCreatingSheet}
-                    className="text-teal-700 hover:text-teal-900 font-bold flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Tạo lại bảng tính mới
-                  </button>
+                {/* 2-Way Sync Buttons */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmSync(true)}
+                      disabled={isSyncing || isPulling}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <ArrowUpFromLine className="w-3.5 h-3.5" />
+                      {isSyncing ? 'Đang lưu...' : 'Ghi Lên Sheets (Xuất)'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPull(true)}
+                      disabled={isSyncing || isPulling}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <ArrowDownToLine className="w-3.5 h-3.5" />
+                      {isPulling ? 'Đang nạp...' : 'Đồng Bộ Ngược Về App (Nhập)'}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setShowManualInput(!showManualInput)}
+                      className="text-slate-500 hover:text-slate-800 font-medium underline cursor-pointer"
+                    >
+                      Đổi bảng tính
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCreateNewSpreadsheet}
+                      disabled={isCreatingSheet}
+                      className="text-teal-700 hover:text-teal-900 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Tạo lại
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -477,7 +555,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                     type="button"
                     onClick={handleCreateNewSpreadsheet}
                     disabled={isCreatingSheet || isAuthLoading}
-                    className="flex flex-col items-center justify-center p-4 bg-gradient-to-b from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 border-2 border-dashed border-emerald-300 rounded-2xl text-center group transition-all"
+                    className="flex flex-col items-center justify-center p-4 bg-gradient-to-b from-emerald-50 to-teal-50 hover:from-emerald-100 hover:to-teal-100 border-2 border-dashed border-emerald-300 rounded-2xl text-center group transition-all cursor-pointer"
                   >
                     <div className="w-10 h-10 bg-emerald-600 text-white rounded-xl flex items-center justify-center mb-2 shadow-xs group-hover:scale-105 transition-transform">
                       <Sparkles className="w-5 h-5" />
@@ -486,14 +564,14 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                       Tự động Tạo Bảng Tính Mới (Khuyên Dùng)
                     </span>
                     <span className="text-[11px] text-slate-500 mt-1">
-                      Tự động tạo sẵn 6 tab chuẩn hóa và format màu sắc
+                      Tự động tạo sẵn 7 tab chuẩn hóa và format màu sắc
                     </span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setShowManualInput(true)}
-                    className="flex flex-col items-center justify-center p-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-center transition-all"
+                    className="flex flex-col items-center justify-center p-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-center transition-all cursor-pointer"
                   >
                     <div className="w-10 h-10 bg-slate-200 text-slate-700 rounded-xl flex items-center justify-center mb-2">
                       <Link2 className="w-5 h-5" />
@@ -525,7 +603,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   <button
                     type="button"
                     onClick={handleLinkExistingSpreadsheet}
-                    className="px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs rounded-xl shadow-xs"
+                    className="px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
                   >
                     Liên kết
                   </button>
@@ -534,10 +612,10 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
             )}
           </div>
 
-          {/* Section 3: Structure of 6 Sheet Tabs */}
+          {/* Section 3: Structure of 7 Sheet Tabs */}
           <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs">
             <span className="text-xs font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5 mb-3">
-              <Layers className="w-3.5 h-3.5 text-indigo-600" /> 3. Danh Sách 6 Sheet Tabs Được Đồng Bộ
+              <Layers className="w-3.5 h-3.5 text-indigo-600" /> 3. Danh Sách 7 Sheet Tabs Được Đồng Bộ
             </span>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
@@ -600,6 +678,21 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   <div className="text-[11px] text-slate-500">Theo dõi nợ tồn, thanh toán chuyển khoản / tiền mặt</div>
                 </div>
               </div>
+
+              <div className="p-2.5 bg-emerald-50/80 rounded-xl border border-emerald-300 col-span-1 sm:col-span-2 flex items-start gap-2">
+                <span className="w-5 h-5 bg-emerald-700 text-white rounded-md font-bold flex items-center justify-center shrink-0 text-[10px]">
+                  7
+                </span>
+                <div>
+                  <div className="font-bold text-emerald-950 flex items-center gap-1.5">
+                    Cấu Hình Hệ Thống (Mới)
+                    <span className="bg-emerald-200 text-emerald-900 text-[10px] px-1.5 rounded">Tự động</span>
+                  </div>
+                  <div className="text-[11px] text-emerald-800">
+                    Lưu trữ & đồng bộ cấu hình 2 tài khoản ngân hàng, mã VietQR, hotline & thông tin shop
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -614,7 +707,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   {new Date(lastSyncStats.syncedAt).toLocaleString('vi-VN')}
                 </span>
               </div>
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 pt-1 text-center font-medium">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-center font-medium">
                 <div className="p-2 bg-white rounded-lg border border-teal-100">
                   <div className="text-[10px] text-slate-500">Đơn hàng</div>
                   <div className="font-black text-teal-800">{lastSyncStats.ordersCount}</div>
@@ -628,31 +721,23 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   <div className="font-black text-teal-800">{lastSyncStats.customersCount}</div>
                 </div>
                 <div className="p-2 bg-white rounded-lg border border-teal-100">
-                  <div className="text-[10px] text-slate-500">Hải sản</div>
-                  <div className="font-black text-teal-800">{lastSyncStats.productsCount}</div>
-                </div>
-                <div className="p-2 bg-white rounded-lg border border-teal-100">
-                  <div className="text-[10px] text-slate-500">Cân chia</div>
-                  <div className="font-black text-teal-800">{lastSyncStats.weighingCount}</div>
-                </div>
-                <div className="p-2 bg-white rounded-lg border border-teal-100">
-                  <div className="text-[10px] text-slate-500">Sổ nợ</div>
-                  <div className="font-black text-teal-800">{lastSyncStats.financeCount}</div>
+                  <div className="text-[10px] text-slate-500">Cấu hình hệ thống</div>
+                  <div className="font-black text-emerald-700">Đã lưu</div>
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* Confirmation Dialog before mutating Workspace data (MANDATORY per Workspace skill) */}
+        {/* Confirmation Dialog before mutating Workspace data */}
         {showConfirmSync && (
           <div className="p-4 bg-amber-50 border-t border-amber-200 space-y-3 animate-fadeIn">
             <div className="flex items-start gap-2.5 text-xs text-amber-900">
               <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
               <div>
-                <div className="font-bold">Xác nhận cập nhật dữ liệu Google Sheets:</div>
+                <div className="font-bold">Xác nhận cập nhật dữ liệu lên Google Sheets:</div>
                 <div>
-                  Thao tác này sẽ ghi đè và làm mới toàn bộ 6 sheet tabs trên bảng tính Google Sheet của bạn với {orders.length} đơn hàng, {batches.length} đợt gom và {customers.length} cư dân hiện tại.
+                  Thao tác này sẽ ghi đè và làm mới toàn bộ 7 sheet tabs trên bảng tính Google Sheet của bạn với {orders.length} đơn hàng, {batches.length} đợt gom, {customers.length} cư dân và Cấu hình hệ thống hiện tại.
                 </div>
               </div>
             </div>
@@ -661,7 +746,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowConfirmSync(false)}
-                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs border border-slate-300"
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs border border-slate-300 cursor-pointer"
               >
                 Hủy
               </button>
@@ -669,9 +754,81 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                 type="button"
                 onClick={() => executeSync()}
                 disabled={isSyncing}
-                className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs shadow-xs"
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs shadow-xs cursor-pointer"
               >
                 <Check className="w-3.5 h-3.5" /> Đồng ý ghi đè & Đồng bộ
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Confirmation Dialog for Reverse Sync (Sheets -> App) */}
+        {showConfirmPull && (
+          <div className="p-4 bg-blue-50 border-t border-blue-200 space-y-3 animate-fadeIn">
+            <div className="flex items-start gap-2.5 text-xs text-blue-900">
+              <ArrowDownToLine className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold">Xác nhận đồng bộ ngược từ Google Sheets về App:</div>
+                <div>
+                  Hệ thống sẽ tải toàn bộ đơn hàng, đợt gom, cư dân, hải sản và Cấu hình hệ thống từ Google Sheets về lưu trữ vào ứng dụng.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirmPull(false)}
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs border border-slate-300 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={executePull}
+                disabled={isPulling}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-xl text-xs shadow-xs cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" /> Nạp dữ liệu từ Sheets
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Disconnect dialog with data loss protection */}
+        {showDisconnectDialog && (
+          <div className="p-4 bg-rose-50 border-t border-rose-200 space-y-3 animate-fadeIn">
+            <div className="flex items-start gap-2.5 text-xs text-rose-900">
+              <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold">Ngắt kết nối tài khoản Google:</div>
+                <div>
+                  Để tránh mất dữ liệu, hệ thống khuyên bạn nên đồng bộ ngược dữ liệu từ Google Sheets về ứng dụng trước khi ngắt kết nối.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDisconnectDialog(false)}
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs border border-slate-300 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSignOutWithAutoSync(false)}
+                className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Ngắt kết nối ngay
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSignOutWithAutoSync(true)}
+                className="flex items-center gap-1 px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs shadow-xs cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" /> Đồng bộ về máy & Ngắt kết nối
               </button>
             </div>
           </div>
@@ -688,7 +845,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors"
+              className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
             >
               Đóng
             </button>
@@ -705,13 +862,15 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                   setShowConfirmSync(true);
                 }
               }}
-              disabled={isSyncing || isCreatingSheet || isAuthLoading}
-              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold rounded-xl text-xs shadow-md transition-all active:scale-95 disabled:opacity-50"
+              disabled={isSyncing || isCreatingSheet || isAuthLoading || isPulling}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold rounded-xl text-xs shadow-md transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
             >
-              <RefreshCw className={`w-4 h-4 ${isSyncing || isCreatingSheet ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${isSyncing || isCreatingSheet || isPulling ? 'animate-spin' : ''}`} />
               <span>
                 {isSyncing
                   ? 'Đang đồng bộ dữ liệu...'
+                  : isPulling
+                  ? 'Đang kéo dữ liệu...'
                   : isCreatingSheet
                   ? 'Đang tạo bảng tính...'
                   : !currentUser
