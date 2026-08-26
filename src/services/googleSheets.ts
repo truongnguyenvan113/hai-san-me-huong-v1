@@ -814,6 +814,66 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
   }
 
   // ----------------------------------------------------
+  // PARSE WEIGHING TAB (TAB 5) - FOR EXACT WEIGHTS & SPECS
+  // ----------------------------------------------------
+  const weighingRows = findSheetRows(SHEET_NAMES.WEIGHING, ['cân chia', 'thực tế', 'weighing', 'cân']);
+  interface WeighedItemInfo {
+    size?: string;
+    actualQty?: number;
+    orderedQty?: number;
+    unit?: string;
+    actualPrice?: number;
+    subtotal?: number;
+    processingNote?: string;
+    isWeighed: boolean;
+    itemNote?: string;
+  }
+  const weighedItemsMap = new Map<string, WeighedItemInfo>();
+
+  if (weighingRows.length > 1) {
+    const wHeaders = (weighingRows[0] || []).map((h: any) => String(h || '').trim());
+    const wColOrderCode = findColIndex(wHeaders, ['mã đơn', 'code', 'mã'], 0);
+    const wColProdName = findColIndex(wHeaders, ['món hải sản', 'sản phẩm', 'tên món', 'hải sản'], 4);
+    const wColSize = findColIndex(wHeaders, ['quy cách', 'size', 'loại'], 5);
+    const wColOrderedQty = findColIndex(wHeaders, ['số lượng đặt', 'đặt'], 6);
+    const wColActualQty = findColIndex(wHeaders, ['số cân thực tế', 'thực tế', 'số kg'], 7);
+    const wColUnit = findColIndex(wHeaders, ['đơn vị', 'unit'], 8);
+    const wColPrice = findColIndex(wHeaders, ['đơn giá', 'giá'], 9);
+    const wColSubtotal = findColIndex(wHeaders, ['thành tiền', 'tổng'], 10);
+    const wColProcessing = findColIndex(wHeaders, ['sơ chế', 'yêu cầu sơ chế'], 11);
+    const wColStatus = findColIndex(wHeaders, ['trạng thái cân', 'tình trạng'], 12);
+    const wColItemNote = findColIndex(wHeaders, ['ghi chú món', 'ghi chú'], 13);
+
+    for (let i = 1; i < weighingRows.length; i++) {
+      const r = weighingRows[i];
+      if (!r || r.length === 0) continue;
+      const orderCode = String(r[wColOrderCode] || '').trim().toLowerCase();
+      const pName = String(r[wColProdName] || '').trim().toLowerCase();
+      if (!orderCode || !pName) continue;
+
+      const actQty = parseFloat(String(r[wColActualQty] || '0').replace(/[^\d.]/g, ''));
+      const ordQty = parseFloat(String(r[wColOrderedQty] || '0').replace(/[^\d.]/g, ''));
+      const actPrice = parseFloat(String(r[wColPrice] || '0').replace(/[^\d.]/g, ''));
+      const subtotal = parseFloat(String(r[wColSubtotal] || '0').replace(/[^\d.]/g, ''));
+      const rawWStatus = String(r[wColStatus] || '').toLowerCase();
+      const isWeighed = rawWStatus.includes('xong') || rawWStatus.includes('đã cân') || (actQty > 0 && !isNaN(actQty));
+
+      const key = `${orderCode}___${pName}`;
+      weighedItemsMap.set(key, {
+        size: r[wColSize] ? String(r[wColSize]).trim() : undefined,
+        orderedQty: !isNaN(ordQty) ? ordQty : undefined,
+        actualQty: !isNaN(actQty) && actQty > 0 ? actQty : undefined,
+        unit: r[wColUnit] ? String(r[wColUnit]).trim() : undefined,
+        actualPrice: !isNaN(actPrice) && actPrice > 0 ? actPrice : undefined,
+        subtotal: !isNaN(subtotal) && subtotal > 0 ? subtotal : undefined,
+        processingNote: r[wColProcessing] ? String(r[wColProcessing]).trim() : undefined,
+        isWeighed,
+        itemNote: r[wColItemNote] ? String(r[wColItemNote]).trim() : undefined,
+      });
+    }
+  }
+
+  // ----------------------------------------------------
   // PARSE BATCHES TAB
   // ----------------------------------------------------
   const batchesRows = findSheetRows(SHEET_NAMES.BATCHES, ['đợt gom', 'đợt hàng', 'đợt', 'batches', 'batch', 'mã đợt']);
@@ -825,9 +885,12 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     const colName = findColIndex(bHeaders, ['tên đợt', 'tên đợt gom', 'đợt gom', 'tên'], 1);
     const colDate = findColIndex(bHeaders, ['ngày tạo', 'ngày mở', 'ngày tạo đợt'], 2);
     const colDelivery = findColIndex(bHeaders, ['ngày giao', 'ngày giao dự kiến', 'giao'], 3);
-    const colStatus = findColIndex(bHeaders, ['trạng thái', 'tình trạng', 'tiến trình'], 4);
+    const colStatus = findColIndex(bHeaders, ['trạng thái đợt', 'trạng thái', 'tình trạng'], 4);
+    const colWorkflow = findColIndex(bHeaders, ['tiến trình luồng xử lý', 'tiến trình', 'luồng xử lý', 'bước'], 5);
     const colOrigin = findColIndex(bHeaders, ['nguồn', 'quê', 'nhà cung cấp', 'vùng'], 8);
     const colNotes = findColIndex(bHeaders, ['ghi chú', 'notes'], bHeaders.length - 1);
+
+    const existingBatches = storage.getBatches();
 
     for (let i = 1; i < batchesRows.length; i++) {
       const r = batchesRows[i];
@@ -838,28 +901,88 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
       if (!rawCode && !rawName) continue;
 
       const batchCode = rawCode || `DOT-${String(i).padStart(3, '0')}`;
-      const batchId = rawCode || `BATCH-${batchCode}`;
       const batchName = rawName || `Đợt Gom Hải Sản #${i}`;
-      const batchDate = r[colDate] ? String(r[colDate]).trim() : new Date().toISOString().slice(0, 10);
-      const deliveryDate = r[colDelivery] ? String(r[colDelivery]).trim() : batchDate;
 
-      // Status mapping
-      const rawStatus = String(r[colStatus] || '').toLowerCase();
+      // Check existing batch for seamless ID matching
+      const existingMatch = existingBatches.find(
+        (eb) =>
+          eb.batch_code.trim().toLowerCase() === batchCode.toLowerCase() ||
+          eb.batch_name.trim().toLowerCase() === batchName.toLowerCase() ||
+          eb.batch_id.trim().toLowerCase() === rawCode.toLowerCase()
+      );
+
+      const batchId = existingMatch ? existingMatch.batch_id : (rawCode.startsWith('BATCH-') ? rawCode : `BATCH-${batchCode}`);
+      const batchDate = r[colDate] ? String(r[colDate]).trim() : (existingMatch?.batch_date || new Date().toISOString().slice(0, 10));
+      const deliveryDate = r[colDelivery] ? String(r[colDelivery]).trim() : (existingMatch?.delivery_date || batchDate);
+
+      // Status mapping - Comprehensive checks on both Status column and Workflow Step column
+      const rawStatus = String(r[colStatus] || '').toLowerCase().trim();
+      const rawWorkflow = colWorkflow !== -1 ? String(r[colWorkflow] || '').toLowerCase().trim() : '';
+      const combinedStatus = `${rawStatus} ${rawWorkflow}`;
+
       let status: Batch['status'] = 'COLLECTING';
-      if (rawStatus.includes('mở') || rawStatus.includes('gom') || rawStatus.includes('open') || rawStatus.includes('collecting')) {
-        status = 'COLLECTING';
-      } else if (rawStatus.includes('chốt') || rawStatus.includes('confirmed')) {
-        status = 'CONFIRMED';
-      } else if (rawStatus.includes('quê') || rawStatus.includes('đặt') || rawStatus.includes('ordered')) {
-        status = 'ORDERED';
-      } else if (rawStatus.includes('nhận') || rawStatus.includes('về') || rawStatus.includes('received') || rawStatus.includes('cân')) {
-        status = 'RECEIVED';
-      } else if (rawStatus.includes('đang giao') || rawStatus.includes('delivering') || rawStatus.includes('ship')) {
-        status = 'DELIVERING';
-      } else if (rawStatus.includes('hoàn thành') || rawStatus.includes('giao xong') || rawStatus.includes('completed') || rawStatus.includes('delivered')) {
-        status = 'COMPLETED';
-      } else if (rawStatus.includes('hủy') || rawStatus.includes('cancel')) {
+
+      if (combinedStatus.includes('hủy') || combinedStatus.includes('cancel')) {
         status = 'CANCELLED';
+      } else if (
+        combinedStatus.includes('bước 7') ||
+        combinedStatus.includes('7/7') ||
+        combinedStatus.includes('hoàn tất') ||
+        combinedStatus.includes('hoàn thành') ||
+        combinedStatus.includes('completed')
+      ) {
+        status = 'COMPLETED';
+      } else if (
+        combinedStatus.includes('bước 6') ||
+        combinedStatus.includes('6/7') ||
+        combinedStatus.includes('đi giao') ||
+        combinedStatus.includes('giao tận phòng') ||
+        combinedStatus.includes('đang giao') ||
+        combinedStatus.includes('delivering') ||
+        combinedStatus.includes('đang ship')
+      ) {
+        status = 'DELIVERING';
+      } else if (
+        combinedStatus.includes('bước 5') ||
+        combinedStatus.includes('5/7') ||
+        combinedStatus.includes('cân chia') ||
+        combinedStatus.includes('đóng túi') ||
+        combinedStatus.includes('đóng gói') ||
+        combinedStatus.includes('distributing') ||
+        combinedStatus.includes('chia hàng')
+      ) {
+        status = 'DISTRIBUTING';
+      } else if (
+        combinedStatus.includes('bước 4') ||
+        combinedStatus.includes('4/7') ||
+        combinedStatus.includes('đã về') ||
+        combinedStatus.includes('nhận hải sản') ||
+        combinedStatus.includes('nhận hàng') ||
+        combinedStatus.includes('về chung cư') ||
+        combinedStatus.includes('received')
+      ) {
+        status = 'RECEIVED';
+      } else if (
+        combinedStatus.includes('bước 3') ||
+        combinedStatus.includes('3/7') ||
+        combinedStatus.includes('đặt hàng quê') ||
+        combinedStatus.includes('đặt quê') ||
+        combinedStatus.includes('đóng thùng') ||
+        combinedStatus.includes('ordered') ||
+        combinedStatus.includes('đã đặt')
+      ) {
+        status = 'ORDERED';
+      } else if (
+        combinedStatus.includes('bước 2') ||
+        combinedStatus.includes('2/7') ||
+        combinedStatus.includes('chốt đợt') ||
+        combinedStatus.includes('chốt số lượng') ||
+        combinedStatus.includes('đã chốt') ||
+        combinedStatus.includes('confirmed')
+      ) {
+        status = 'CONFIRMED';
+      } else {
+        status = 'COLLECTING';
       }
 
       restoredBatches.push({
@@ -920,59 +1043,133 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
       const total = parseFloat(String(r[colTotal] || '0').replace(/[^\d.]/g, '')) || 0;
       const paid = parseFloat(String(r[colPaid] || '0').replace(/[^\d.]/g, '')) || 0;
       const debt = parseFloat(String(r[colDebt] || '0').replace(/[^\d.]/g, '')) || Math.max(0, total - paid);
-      const rawOrderStatus = String(r[colOrderStatus] || '').toLowerCase();
-      const rawDeliveryStatus = String(r[colDeliveryStatus] || '').toLowerCase();
+      const rawOrderStatus = String(r[colOrderStatus] || '').toLowerCase().trim();
+      const rawDeliveryStatus = String(r[colDeliveryStatus] || '').toLowerCase().trim();
       const paymentMethod = String(r[colPaymentMethod] || 'QR').trim();
       const note = r[colNote] ? String(r[colNote]).trim() : '';
       const createdAt = r[colCreatedAt] ? String(r[colCreatedAt]).trim() : new Date().toISOString();
 
       // Find matching batch
       const matchedBatch = restoredBatches.find(
-        (b) => b.batch_code === rawBatch || b.batch_name === rawBatch || b.batch_id === rawBatch
+        (b) =>
+          b.batch_code.toLowerCase() === rawBatch.toLowerCase() ||
+          b.batch_name.toLowerCase() === rawBatch.toLowerCase() ||
+          b.batch_id.toLowerCase() === rawBatch.toLowerCase()
       ) || restoredBatches[0];
 
-      // Parse items
+      // Parse items & augment from Tab 5 weighing map if available
       const parsedItems = (itemsSummaryStr ? itemsSummaryStr.split(';') : []).map((seg: string, idx: number) => {
         const clean = seg.trim();
         const parts = clean.split(':');
         const pName = parts[0]?.trim() || 'Hải sản tươi';
         const qtyMatch = parts[1]?.match(/([\d.]+)\s*(\w+)?/);
-        const qty = qtyMatch ? parseFloat(qtyMatch[1]) : 1;
-        const unit = (qtyMatch && qtyMatch[2] ? qtyMatch[2] : 'kg') as any;
+        const parsedQty = qtyMatch ? parseFloat(qtyMatch[1]) : 1;
+        const parsedUnit = (qtyMatch && qtyMatch[2] ? qtyMatch[2] : 'kg') as any;
+
+        // Check if there is extra info in Tab 5
+        const weighKey = `${effectiveOrderCode.toLowerCase()}___${pName.toLowerCase()}`;
+        const weighInfo = weighedItemsMap.get(weighKey);
+
+        const qtyOrdered = weighInfo?.orderedQty ?? parsedQty;
+        const qtyActual = weighInfo?.actualQty ?? parsedQty;
+        const unit = weighInfo?.unit || parsedUnit;
+        const estPrice = total > 0 ? Math.round(total / (itemsSummaryStr.split(';').length || 1)) : 0;
+        const actPrice = weighInfo?.actualPrice ?? estPrice;
+        const itemSubtotal = weighInfo?.subtotal ?? (qtyActual * actPrice);
 
         return {
           order_item_id: `ITEM-${effectiveOrderCode}-${idx + 1}`,
           order_id: `ORD-${effectiveOrderCode}`,
           product_id: `PROD-${idx + 1}`,
           product_name: pName,
-          quantity_ordered: qty,
-          quantity_actual: qty,
+          size: weighInfo?.size || '',
+          quantity_ordered: qtyOrdered,
+          quantity_actual: qtyActual,
           unit,
-          estimated_price: total > 0 ? Math.round(total / (parts.length || 1)) : 0,
-          actual_price: total > 0 ? Math.round(total / (parts.length || 1)) : 0,
-          subtotal: total > 0 ? Math.round(total / (parts.length || 1)) : 0,
-          status: 'PACKED' as const,
+          estimated_price: estPrice,
+          actual_price: actPrice,
+          subtotal: itemSubtotal || total,
+          processing_note: weighInfo?.processingNote || '',
+          item_note: weighInfo?.itemNote || '',
+          status: weighInfo?.isWeighed ? ('WEIGHED' as const) : ('PACKED' as const),
         };
       });
 
       // Order status resolution
       let status: Order['status'] = 'CONFIRMED';
+      let delivery_status: Order['delivery_status'] = 'PENDING';
+      let is_packed = false;
+      let is_weighed = false;
+
       if (rawOrderStatus.includes('hủy') || rawOrderStatus.includes('cancel')) {
         status = 'CANCELLED';
-      } else if (rawOrderStatus.includes('giao xong') || rawOrderStatus.includes('hoàn thành')) {
+      } else if (
+        rawDeliveryStatus.includes('đã giao') ||
+        rawDeliveryStatus.includes('giao xong') ||
+        rawDeliveryStatus.includes('delivered') ||
+        rawOrderStatus.includes('đã giao') ||
+        rawOrderStatus.includes('hoàn thành')
+      ) {
         status = 'DELIVERED';
-      } else if (rawOrderStatus.includes('đang giao')) {
+        delivery_status = 'DELIVERED';
+        is_packed = true;
+        is_weighed = true;
+      } else if (
+        rawDeliveryStatus.includes('đang ship') ||
+        rawDeliveryStatus.includes('đang giao') ||
+        rawDeliveryStatus.includes('delivering') ||
+        rawDeliveryStatus.includes('đi giao') ||
+        rawOrderStatus.includes('đang giao') ||
+        rawOrderStatus.includes('delivering')
+      ) {
         status = 'DELIVERING';
-      } else if (rawOrderStatus.includes('nhận') || rawOrderStatus.includes('đóng')) {
+        delivery_status = 'DELIVERING';
+        is_packed = true;
+        is_weighed = true;
+      } else if (
+        rawOrderStatus.includes('đóng túi') ||
+        rawOrderStatus.includes('đóng gói') ||
+        rawOrderStatus.includes('packed')
+      ) {
         status = 'PACKED';
+        delivery_status = 'PENDING';
+        is_packed = true;
+        is_weighed = true;
+      } else if (rawOrderStatus.includes('nhận') || rawOrderStatus.includes('received')) {
+        status = 'RECEIVED';
+        delivery_status = 'PENDING';
+      } else if (rawOrderStatus.includes('đặt') || rawOrderStatus.includes('quê') || rawOrderStatus.includes('ordered')) {
+        status = 'ORDERED';
+        delivery_status = 'PENDING';
+      } else if (rawOrderStatus.includes('chốt') || rawOrderStatus.includes('confirmed')) {
+        status = 'CONFIRMED';
+        delivery_status = 'PENDING';
+      } else {
+        status = 'COLLECTING';
+        delivery_status = 'PENDING';
       }
 
-      // Delivery status resolution
-      let delivery_status: Order['delivery_status'] = 'PENDING';
-      if (rawDeliveryStatus.includes('đã giao') || rawDeliveryStatus.includes('xong') || rawDeliveryStatus.includes('delivered')) {
-        delivery_status = 'DELIVERED';
-      } else if (rawDeliveryStatus.includes('đang') || rawDeliveryStatus.includes('delivering') || rawDeliveryStatus.includes('ship')) {
-        delivery_status = 'DELIVERING';
+      // Check if batch is in advanced stages
+      if (matchedBatch) {
+        if (matchedBatch.status === 'COMPLETED' && status !== 'CANCELLED') {
+          status = 'DELIVERED';
+          delivery_status = 'DELIVERED';
+          is_packed = true;
+          is_weighed = true;
+        } else if (matchedBatch.status === 'DELIVERING' && status !== 'CANCELLED') {
+          if (delivery_status === 'PENDING') {
+            delivery_status = 'DELIVERING';
+            status = 'DELIVERING';
+          }
+          is_packed = true;
+          is_weighed = true;
+        } else if (matchedBatch.status === 'DISTRIBUTING' && status !== 'CANCELLED') {
+          if (status === 'COLLECTING' || status === 'CONFIRMED' || status === 'ORDERED' || status === 'RECEIVED') {
+            status = 'PACKED';
+          }
+          is_packed = true;
+          is_weighed = true;
+        }
       }
 
       // Payment status resolution
@@ -1019,6 +1216,8 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
         status,
         payment_status,
         delivery_status,
+        is_weighed,
+        is_packed,
         payment_method: (paymentMethod as any) || 'QR',
         note,
         created_at: createdAt,

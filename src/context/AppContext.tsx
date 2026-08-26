@@ -269,17 +269,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const refreshData = () => {
     storage.init();
+    const freshBatches = storage.getBatches();
+    const freshOrders = storage.getOrders();
     setSettings(storage.getSettings());
     setProducts(storage.getProducts());
     setCustomers(storage.getCustomers());
-    setBatches(storage.getBatches());
-    setOrders(storage.getOrders());
+    setBatches(freshBatches);
+    setOrders(freshOrders);
     setPayments(storage.getPayments());
     setAuditLogs(storage.getAuditLogs());
 
     const curBatchId = storage.getCurrentBatchId();
-    if (curBatchId && !selectedBatchId) {
-      setSelectedBatchId(curBatchId);
+    if (freshBatches.length > 0) {
+      if (!selectedBatchId || !freshBatches.some((b) => b.batch_id === selectedBatchId)) {
+        const nextBatchId = curBatchId && freshBatches.some((b) => b.batch_id === curBatchId) ? curBatchId : freshBatches[0].batch_id;
+        setSelectedBatchId(nextBatchId);
+        storage.setCurrentBatchId(nextBatchId);
+      }
     }
   };
 
