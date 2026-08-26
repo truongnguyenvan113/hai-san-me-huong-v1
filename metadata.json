@@ -1,0 +1,6 @@
+{
+  "name": "Quản lý Gom Đơn Hải Sản Chung Cư",
+  "description": "Hệ thống quản lý gom đơn hải sản Mẹ Hường, phục vụ cư dân chung cư Geleximco 897 Giải Phóng - Hà Nội",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
