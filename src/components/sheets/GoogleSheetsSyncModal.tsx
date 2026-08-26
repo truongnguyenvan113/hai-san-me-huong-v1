@@ -222,14 +222,21 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     triggerSyncNow();
   };
 
-  const handleSelectDriveSheet = (sheet: { id: string; url: string; name: string }) => {
+  const handleSelectDriveSheet = async (sheet: { id: string; url: string; name: string }) => {
     setSpreadsheetInfo(sheet.id, sheet.url);
     addToast({
       type: 'SUCCESS',
-      title: 'Đã kết nối bảng tính có sẵn',
-      message: `Đã liên kết với "${sheet.name}". Dữ liệu được đồng bộ liên tục!`,
+      title: 'Đã kết nối bảng tính',
+      message: `Đang tự động nạp dữ liệu từ "${sheet.name}" về ứng dụng...`,
     });
-    executeSync(sheet.id);
+    setIsPulling(true);
+    try {
+      await pullFromSheets(sheet.id);
+    } catch (err: any) {
+      console.warn('Lỗi tự động nạp dữ liệu từ Drive Sheet:', err);
+    } finally {
+      setIsPulling(false);
+    }
   };
 
   const copyDomainToClipboard = (textToCopy: string) => {
@@ -313,7 +320,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   };
 
   // Link existing spreadsheet
-  const handleLinkExistingSpreadsheet = () => {
+  const handleLinkExistingSpreadsheet = async () => {
     if (!manualInputId.trim()) return;
 
     let cleanId = manualInputId.trim();
@@ -331,8 +338,17 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     addToast({
       type: 'SUCCESS',
       title: 'Đã liên kết Google Sheet',
-      message: `ID Bảng tính: ${cleanId.slice(0, 10)}...`,
+      message: 'Đang tự động nạp dữ liệu từ bảng tính về ứng dụng...',
     });
+
+    setIsPulling(true);
+    try {
+      await pullFromSheets(cleanId);
+    } catch (err: any) {
+      console.warn('Lỗi tự động nạp dữ liệu từ Sheet URL:', err);
+    } finally {
+      setIsPulling(false);
+    }
   };
 
   // Perform sync execution (App -> Sheets)

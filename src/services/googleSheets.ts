@@ -601,27 +601,83 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     throw new Error('Chưa cung cấp ID tệp Google Sheets để nạp dữ liệu');
   }
 
-  // 1. Fetch values from all tabs
-  const ranges = [
-    `${SHEET_NAMES.ORDERS}!A1:Z500`,
-    `${SHEET_NAMES.BATCHES}!A1:Z500`,
-    `${SHEET_NAMES.CUSTOMERS}!A1:Z500`,
-    `${SHEET_NAMES.PRODUCTS}!A1:Z500`,
-    `${SHEET_NAMES.SETTINGS}!A1:Z50`,
-  ];
+  // 1. Get spreadsheet metadata first to discover existing sheet tabs
+  const meta = await fetchSheetsApi(`/${spreadsheetId}?fields=sheets(properties(sheetId,title))`);
+  const sheetList: Array<{ title: string; sheetId?: number }> = (meta.sheets || []).map((s: any) => ({
+    title: s.properties?.title || '',
+    sheetId: s.properties?.sheetId,
+  })).filter((s: any) => Boolean(s.title));
 
+  if (sheetList.length === 0) {
+    throw new Error('Không tìm thấy bất kỳ trang tính nào trong tệp Google Sheets này');
+  }
+
+  // 2. Fetch all values safely for existing sheets
+  const ranges = sheetList.map((s) => `'${s.title}'!A1:Z1000`);
   const response = await fetchSheetsApi(
     `/${spreadsheetId}/values:batchGet?${ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join('&')}`
   );
 
   const valueRanges = response.valueRanges || [];
-  const getSheetRows = (sheetName: string): any[][] => {
-    const found = valueRanges.find((vr: any) => vr.range && vr.range.startsWith(`'${sheetName}'`) || vr.range?.startsWith(sheetName));
+  const getSheetDataByTitle = (targetTitle: string): any[][] => {
+    const found = valueRanges.find((vr: any) => {
+      if (!vr || !vr.range) return false;
+      const cleanRange = vr.range.replace(/^'|'$/g, '');
+      return (
+        cleanRange.startsWith(targetTitle) ||
+        cleanRange.startsWith(`'${targetTitle}'`) ||
+        vr.range.startsWith(`'${targetTitle}'!`) ||
+        vr.range.startsWith(`${targetTitle}!`)
+      );
+    });
     return (found && found.values) || [];
   };
 
-  // Parse Settings Tab
-  const settingsRows = getSheetRows(SHEET_NAMES.SETTINGS);
+  // Helper to find sheet by candidate names or keywords
+  const findSheetRows = (exactName: string, keywords: string[]): any[][] => {
+    // Try exact match first
+    const exactRows = getSheetDataByTitle(exactName);
+    if (exactRows && exactRows.length > 0) return exactRows;
+
+    // Try keyword match in sheet title
+    for (const sheet of sheetList) {
+      const lower = sheet.title.toLowerCase();
+      if (keywords.some((kw) => lower.includes(kw.toLowerCase()))) {
+        const rows = getSheetDataByTitle(sheet.title);
+        if (rows && rows.length > 0) return rows;
+      }
+    }
+
+    // Try inspecting headers (row 0) of all sheets
+    for (const sheet of sheetList) {
+      const rows = getSheetDataByTitle(sheet.title);
+      if (rows && rows.length > 0 && Array.isArray(rows[0])) {
+        const headerStr = rows[0].join(' ').toLowerCase();
+        if (keywords.some((kw) => headerStr.includes(kw.toLowerCase()))) {
+          return rows;
+        }
+      }
+    }
+
+    return [];
+  };
+
+  // Helper: column finder in header row
+  const findColIndex = (headers: string[], candidates: string[], fallback: number): number => {
+    if (!headers || headers.length === 0) return fallback;
+    for (let i = 0; i < headers.length; i++) {
+      const h = String(headers[i] || '').trim().toLowerCase();
+      if (candidates.some((c) => h.includes(c.toLowerCase()))) {
+        return i;
+      }
+    }
+    return fallback;
+  };
+
+  // ----------------------------------------------------
+  // PARSE SETTINGS TAB
+  // ----------------------------------------------------
+  const settingsRows = findSheetRows(SHEET_NAMES.SETTINGS, ['cấu hình', 'hệ thống', 'settings', 'config', 'ngân hàng']);
   let restoredSettings: Partial<StoreSettings> = {};
   let settingsRestored = false;
 
@@ -664,170 +720,337 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     settingsRestored = true;
   }
 
-  // Parse Products Tab
-  const productsRows = getSheetRows(SHEET_NAMES.PRODUCTS);
-  const restoredProducts: Product[] = [];
-  if (productsRows.length > 1) {
-    for (let i = 1; i < productsRows.length; i++) {
-      const r = productsRows[i];
-      if (r[0] || r[1]) {
-        restoredProducts.push({
-          product_id: `PROD-${r[0] || i}`,
-          sku: r[0] || `SKU-${i}`,
-          product_name: r[1] || 'Hải Sản',
-          category: r[2] || 'Hải sản',
-          size: r[3] || '',
-          origin: r[4] || '',
-          unit: r[5] || 'kg',
-          default_price: parseFloat(String(r[6]).replace(/[^\d.]/g, '')) || 0,
-          status: r[7] === 'Tạm ngưng' ? 'INACTIVE' : 'ACTIVE',
-          description: r[8] || '',
-        });
-      }
-    }
-  }
-
-  // Parse Customers Tab
-  const customersRows = getSheetRows(SHEET_NAMES.CUSTOMERS);
-  const restoredCustomers: Customer[] = [];
-  if (customersRows.length > 1) {
-    for (let i = 1; i < customersRows.length; i++) {
-      const r = customersRows[i];
-      if (r[0] || r[1]) {
-        restoredCustomers.push({
-          customer_id: `CUST-${r[0] || i}`,
-          customer_code: r[0] || `CD-${i}`,
-          name: r[1] || 'Cư dân',
-          phone: r[2] || '',
-          building: r[3] || 'Tòa A',
-          room: r[4] || '101',
-          address: r[5] || '',
-          note: r[9] || '',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-      }
-    }
-  }
-
-  // Parse Batches Tab
-  const batchesRows = getSheetRows(SHEET_NAMES.BATCHES);
+  // ----------------------------------------------------
+  // PARSE BATCHES TAB
+  // ----------------------------------------------------
+  const batchesRows = findSheetRows(SHEET_NAMES.BATCHES, ['đợt gom', 'đợt hàng', 'đợt', 'batches', 'batch', 'mã đợt']);
   const restoredBatches: Batch[] = [];
+
   if (batchesRows.length > 1) {
+    const bHeaders = (batchesRows[0] || []).map((h: any) => String(h || '').trim());
+    const colCode = findColIndex(bHeaders, ['mã đợt', 'mã', 'code'], 0);
+    const colName = findColIndex(bHeaders, ['tên đợt', 'tên đợt gom', 'đợt gom', 'tên'], 1);
+    const colDate = findColIndex(bHeaders, ['ngày tạo', 'ngày mở', 'ngày tạo đợt'], 2);
+    const colDelivery = findColIndex(bHeaders, ['ngày giao', 'ngày giao dự kiến', 'giao'], 3);
+    const colStatus = findColIndex(bHeaders, ['trạng thái', 'tình trạng'], 4);
+    const colOrigin = findColIndex(bHeaders, ['nguồn', 'quê', 'nhà cung cấp', 'vùng'], 5);
+    const colNotes = findColIndex(bHeaders, ['ghi chú', 'notes'], 9);
+
     for (let i = 1; i < batchesRows.length; i++) {
       const r = batchesRows[i];
-      if (r[0] || r[1]) {
-        restoredBatches.push({
-          batch_id: `BATCH-${r[0] || i}`,
-          batch_code: r[0] || `BATCH-${i}`,
-          batch_name: r[1] || 'Đợt Gom Hải Sản',
-          batch_date: r[2] || new Date().toISOString().slice(0, 10),
-          delivery_date: r[3] || new Date().toISOString().slice(0, 10),
-          status: 'COLLECTING',
-          supplier_info: { location: r[5] || 'Quảng Ninh' },
-          notes: r[9] || '',
-          created_at: r[2] || new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
+      if (!r || r.length === 0) continue;
+      const rawCode = String(r[colCode] || '').trim();
+      const rawName = String(r[colName] || '').trim();
+
+      if (!rawCode && !rawName) continue;
+
+      const batchCode = rawCode || `DOT-${String(i).padStart(3, '0')}`;
+      const batchId = rawCode || `BATCH-${batchCode}`;
+      const batchName = rawName || `Đợt Gom Hải Sản #${i}`;
+      const batchDate = r[colDate] ? String(r[colDate]).trim() : new Date().toISOString().slice(0, 10);
+      const deliveryDate = r[colDelivery] ? String(r[colDelivery]).trim() : batchDate;
+
+      // Status mapping
+      const rawStatus = String(r[colStatus] || '').toLowerCase();
+      let status: Batch['status'] = 'COLLECTING';
+      if (rawStatus.includes('mở') || rawStatus.includes('gom') || rawStatus.includes('open') || rawStatus.includes('collecting')) {
+        status = 'COLLECTING';
+      } else if (rawStatus.includes('chốt') || rawStatus.includes('confirmed')) {
+        status = 'CONFIRMED';
+      } else if (rawStatus.includes('quê') || rawStatus.includes('đặt') || rawStatus.includes('ordered')) {
+        status = 'ORDERED';
+      } else if (rawStatus.includes('nhận') || rawStatus.includes('về') || rawStatus.includes('received') || rawStatus.includes('cân')) {
+        status = 'RECEIVED';
+      } else if (rawStatus.includes('đang giao') || rawStatus.includes('delivering') || rawStatus.includes('ship')) {
+        status = 'DELIVERING';
+      } else if (rawStatus.includes('hoàn thành') || rawStatus.includes('giao xong') || rawStatus.includes('completed') || rawStatus.includes('delivered')) {
+        status = 'COMPLETED';
+      } else if (rawStatus.includes('hủy') || rawStatus.includes('cancel')) {
+        status = 'CANCELLED';
       }
+
+      restoredBatches.push({
+        batch_id: batchId,
+        batch_code: batchCode,
+        batch_name: batchName,
+        batch_date: batchDate,
+        delivery_date: deliveryDate,
+        status,
+        supplier_info: { location: r[colOrigin] ? String(r[colOrigin]).trim() : 'Quảng Ninh & Cà Mau' },
+        notes: r[colNotes] ? String(r[colNotes]).trim() : '',
+        created_at: batchDate,
+        updated_at: new Date().toISOString(),
+      });
     }
   }
 
-  // Parse Orders Tab
-  const ordersRows = getSheetRows(SHEET_NAMES.ORDERS);
+  // ----------------------------------------------------
+  // PARSE ORDERS TAB
+  // ----------------------------------------------------
+  const ordersRows = findSheetRows(SHEET_NAMES.ORDERS, ['đơn hàng', 'chi tiết đơn', 'orders', 'đơn', 'mã đơn']);
   const restoredOrders: Order[] = [];
+
   if (ordersRows.length > 1) {
+    const oHeaders = (ordersRows[0] || []).map((h: any) => String(h || '').trim());
+    const colOrderCode = findColIndex(oHeaders, ['mã đơn', 'code', 'mã'], 0);
+    const colCustName = findColIndex(oHeaders, ['tên khách hàng', 'tên cư dân', 'tên khách', 'khách hàng', 'cư dân'], 1);
+    const colPhone = findColIndex(oHeaders, ['số điện thoại', 'sđt', 'phone', 'điện thoại'], 2);
+    const colBuilding = findColIndex(oHeaders, ['tòa nhà', 'tòa', 'building'], 3);
+    const colRoom = findColIndex(oHeaders, ['số phòng', 'phòng', 'căn hộ', 'room'], 4);
+    const colBatch = findColIndex(oHeaders, ['đợt gom', 'đợt hàng', 'tên đợt', 'mã đợt', 'đợt'], 5);
+    const colDelivery = findColIndex(oHeaders, ['ngày giao hàng', 'ngày giao', 'delivery'], 6);
+    const colItems = findColIndex(oHeaders, ['món hải sản', 'sản phẩm', 'mặt hàng', 'món đặt', 'chi tiết'], 7);
+    const colTotal = findColIndex(oHeaders, ['tổng tiền', 'tổng cộng', 'thành tiền', 'tiền đơn'], 8);
+    const colPaid = findColIndex(oHeaders, ['đã thanh toán', 'đã trả', 'đã thu'], 9);
+    const colDebt = findColIndex(oHeaders, ['còn nợ', 'nợ', 'chưa thu'], 10);
+    const colOrderStatus = findColIndex(oHeaders, ['trạng thái đơn', 'trạng thái'], 11);
+    const colDeliveryStatus = findColIndex(oHeaders, ['trạng thái giao', 'giao hàng'], 12);
+    const colPaymentStatus = findColIndex(oHeaders, ['thanh toán', 'tình trạng thanh toán'], 13);
+    const colPaymentMethod = findColIndex(oHeaders, ['hình thức', 'phương thức', 'chuyển khoản', 'tiền mặt'], 14);
+    const colNote = findColIndex(oHeaders, ['ghi chú đơn', 'ghi chú', 'note'], 15);
+    const colCreatedAt = findColIndex(oHeaders, ['thời gian tạo', 'ngày tạo', 'created'], 16);
+
     for (let i = 1; i < ordersRows.length; i++) {
       const r = ordersRows[i];
-      if (r[0]) {
-        const orderCode = String(r[0]);
-        const custName = r[1] || 'Cư dân';
-        const custPhone = r[2] || '';
-        const building = r[3] || '';
-        const room = r[4] || '';
-        const batchName = r[5] || '';
-        const deliveryDate = r[6] || '';
-        const itemsSummaryStr = r[7] || '';
-        const total = parseFloat(String(r[8]).replace(/[^\d.]/g, '')) || 0;
-        const paid = parseFloat(String(r[9]).replace(/[^\d.]/g, '')) || 0;
-        const debt = parseFloat(String(r[10]).replace(/[^\d.]/g, '')) || 0;
-        const statusText = r[11] || '';
-        const deliveryStatusText = r[12] || '';
-        const paymentMethod = r[14] || 'QR';
-        const note = r[15] || '';
-        const createdAt = r[16] || new Date().toISOString();
+      if (!r || r.length === 0) continue;
+      const orderCode = String(r[colOrderCode] || '').trim();
+      const custName = String(r[colCustName] || '').trim();
+      if (!orderCode && !custName) continue;
 
-        // Parse items back from summary string if available
-        const parsedItems = (itemsSummaryStr ? itemsSummaryStr.split(';') : []).map((itemSeg: string, idx: number) => {
-          const clean = itemSeg.trim();
-          return {
-            order_item_id: `ITEM-${orderCode}-${idx + 1}`,
-            order_id: `ORD-${orderCode}`,
-            product_id: `PROD-${idx + 1}`,
-            product_name: clean.split(':')[0]?.trim() || 'Hải sản',
+      const effectiveOrderCode = orderCode || `ORD-${String(i).padStart(3, '0')}`;
+      const custPhone = r[colPhone] ? String(r[colPhone]).trim() : '';
+      const building = r[colBuilding] ? String(r[colBuilding]).trim() : '';
+      const room = r[colRoom] ? String(r[colRoom]).trim() : '';
+      const rawBatch = r[colBatch] ? String(r[colBatch]).trim() : '';
+      const deliveryDate = r[colDelivery] ? String(r[colDelivery]).trim() : '';
+      const itemsSummaryStr = r[colItems] ? String(r[colItems]).trim() : '';
+      const total = parseFloat(String(r[colTotal] || '0').replace(/[^\d.]/g, '')) || 0;
+      const paid = parseFloat(String(r[colPaid] || '0').replace(/[^\d.]/g, '')) || 0;
+      const debt = parseFloat(String(r[colDebt] || '0').replace(/[^\d.]/g, '')) || Math.max(0, total - paid);
+      const rawOrderStatus = String(r[colOrderStatus] || '').toLowerCase();
+      const rawDeliveryStatus = String(r[colDeliveryStatus] || '').toLowerCase();
+      const paymentMethod = String(r[colPaymentMethod] || 'QR').trim();
+      const note = r[colNote] ? String(r[colNote]).trim() : '';
+      const createdAt = r[colCreatedAt] ? String(r[colCreatedAt]).trim() : new Date().toISOString();
+
+      // Find matching batch
+      const matchedBatch = restoredBatches.find(
+        (b) => b.batch_code === rawBatch || b.batch_name === rawBatch || b.batch_id === rawBatch
+      ) || restoredBatches[0];
+
+      // Parse items
+      const parsedItems = (itemsSummaryStr ? itemsSummaryStr.split(';') : []).map((seg: string, idx: number) => {
+        const clean = seg.trim();
+        const parts = clean.split(':');
+        const pName = parts[0]?.trim() || 'Hải sản tươi';
+        const qtyMatch = parts[1]?.match(/([\d.]+)\s*(\w+)?/);
+        const qty = qtyMatch ? parseFloat(qtyMatch[1]) : 1;
+        const unit = (qtyMatch && qtyMatch[2] ? qtyMatch[2] : 'kg') as any;
+
+        return {
+          order_item_id: `ITEM-${effectiveOrderCode}-${idx + 1}`,
+          order_id: `ORD-${effectiveOrderCode}`,
+          product_id: `PROD-${idx + 1}`,
+          product_name: pName,
+          quantity_ordered: qty,
+          quantity_actual: qty,
+          unit,
+          estimated_price: total > 0 ? Math.round(total / (parts.length || 1)) : 0,
+          actual_price: total > 0 ? Math.round(total / (parts.length || 1)) : 0,
+          subtotal: total > 0 ? Math.round(total / (parts.length || 1)) : 0,
+          status: 'PACKED' as const,
+        };
+      });
+
+      // Order status resolution
+      let status: Order['status'] = 'CONFIRMED';
+      if (rawOrderStatus.includes('hủy') || rawOrderStatus.includes('cancel')) {
+        status = 'CANCELLED';
+      } else if (rawOrderStatus.includes('giao xong') || rawOrderStatus.includes('hoàn thành')) {
+        status = 'DELIVERED';
+      } else if (rawOrderStatus.includes('đang giao')) {
+        status = 'DELIVERING';
+      } else if (rawOrderStatus.includes('nhận') || rawOrderStatus.includes('đóng')) {
+        status = 'PACKED';
+      }
+
+      // Delivery status resolution
+      let delivery_status: Order['delivery_status'] = 'PENDING';
+      if (rawDeliveryStatus.includes('đã giao') || rawDeliveryStatus.includes('xong') || rawDeliveryStatus.includes('delivered')) {
+        delivery_status = 'DELIVERED';
+      } else if (rawDeliveryStatus.includes('đang') || rawDeliveryStatus.includes('delivering') || rawDeliveryStatus.includes('ship')) {
+        delivery_status = 'DELIVERING';
+      }
+
+      // Payment status resolution
+      let payment_status: Order['payment_status'] = 'UNPAID';
+      if (paid >= total && total > 0) {
+        payment_status = 'PAID';
+      } else if (paid > 0 && paid < total) {
+        payment_status = 'PARTIAL';
+      } else if (debt > 0 && paid === 0) {
+        payment_status = 'DEBT';
+      }
+
+      restoredOrders.push({
+        order_id: `ORD-${effectiveOrderCode}`,
+        order_code: effectiveOrderCode,
+        customer_id: `CUST-${room || effectiveOrderCode}`,
+        customer_name: custName || 'Cư dân',
+        customer_phone: custPhone,
+        customer_building: building || 'Tòa Nhà',
+        customer_room: room || '101',
+        batch_id: matchedBatch ? matchedBatch.batch_id : 'BATCH-ACTIVE',
+        batch_name: matchedBatch ? matchedBatch.batch_name : rawBatch || 'Đợt Gom Hải Sản',
+        order_date: createdAt.slice(0, 10),
+        delivery_date: deliveryDate || (matchedBatch ? matchedBatch.delivery_date : createdAt.slice(0, 10)),
+        items: parsedItems.length > 0 ? parsedItems : [
+          {
+            order_item_id: `ITEM-${effectiveOrderCode}-1`,
+            order_id: `ORD-${effectiveOrderCode}`,
+            product_id: 'PROD-1',
+            product_name: 'Hải Sản Tươi',
             quantity_ordered: 1,
             unit: 'kg' as const,
             estimated_price: total,
             subtotal: total,
             status: 'PENDING' as const,
-          };
-        });
-
-        restoredOrders.push({
-          order_id: `ORD-${orderCode}`,
-          order_code: orderCode,
-          customer_id: `CUST-${room || orderCode}`,
-          customer_name: custName,
-          customer_phone: custPhone,
-          customer_building: building,
-          customer_room: room,
-          batch_id: `BATCH-ACTIVE`,
-          batch_name: batchName,
-          order_date: createdAt.slice(0, 10),
-          delivery_date: deliveryDate,
-          items: parsedItems.length > 0 ? parsedItems : [
-            {
-              order_item_id: `ITEM-${orderCode}-1`,
-              order_id: `ORD-${orderCode}`,
-              product_id: 'PROD-1',
-              product_name: 'Hải Sản Tươi',
-              quantity_ordered: 1,
-              unit: 'kg' as const,
-              estimated_price: total,
-              subtotal: total,
-              status: 'PENDING' as const,
-            },
-          ],
-          subtotal: total,
-          discount: 0,
-          shipping_fee: 0,
-          total,
-          paid_amount: paid,
-          debt_amount: debt,
-          status: statusText.includes('hủy') ? 'CANCELLED' : statusText.includes('giao') ? 'DELIVERED' : 'CONFIRMED',
-          payment_status: paid >= total && total > 0 ? 'PAID' : paid > 0 ? 'PARTIAL' : 'UNPAID',
-          delivery_status: deliveryStatusText.includes('giao xong') || deliveryStatusText.includes('Đã giao') ? 'DELIVERED' : 'PENDING',
-          payment_method: (paymentMethod as any) || 'QR',
-          note,
-          created_at: createdAt,
-          updated_at: new Date().toISOString(),
-        });
-      }
+          },
+        ],
+        subtotal: total,
+        discount: 0,
+        shipping_fee: 0,
+        total,
+        paid_amount: paid,
+        debt_amount: debt,
+        status,
+        payment_status,
+        delivery_status,
+        payment_method: (paymentMethod as any) || 'QR',
+        note,
+        created_at: createdAt,
+        updated_at: new Date().toISOString(),
+      });
     }
   }
 
-  // Save parsed data to storage if any rows were found
+  // ----------------------------------------------------
+  // PARSE CUSTOMERS TAB & MERGE FROM ORDERS
+  // ----------------------------------------------------
+  const customersRows = findSheetRows(SHEET_NAMES.CUSTOMERS, ['cư dân', 'danh bạ', 'khách hàng', 'customers', 'khách']);
+  const restoredCustomers: Customer[] = [];
+
+  if (customersRows.length > 1) {
+    const cHeaders = (customersRows[0] || []).map((h: any) => String(h || '').trim());
+    const colCustCode = findColIndex(cHeaders, ['mã cư dân', 'mã khách', 'mã', 'code'], 0);
+    const colName = findColIndex(cHeaders, ['tên cư dân', 'tên khách hàng', 'tên', 'họ tên'], 1);
+    const colPhone = findColIndex(cHeaders, ['số điện thoại', 'sđt', 'phone'], 2);
+    const colBuilding = findColIndex(cHeaders, ['tòa nhà', 'tòa', 'building'], 3);
+    const colRoom = findColIndex(cHeaders, ['số phòng', 'phòng', 'room', 'căn hộ'], 4);
+    const colAddress = findColIndex(cHeaders, ['địa chỉ', 'address'], 5);
+    const colNote = findColIndex(cHeaders, ['ghi chú', 'note'], 9);
+
+    for (let i = 1; i < customersRows.length; i++) {
+      const r = customersRows[i];
+      if (!r || r.length === 0) continue;
+      const cName = String(r[colName] || '').trim();
+      const cCode = String(r[colCustCode] || '').trim();
+      if (!cName && !cCode) continue;
+
+      const custCode = cCode || `CD-${String(i).padStart(3, '0')}`;
+      restoredCustomers.push({
+        customer_id: `CUST-${custCode}`,
+        customer_code: custCode,
+        name: cName || 'Cư dân',
+        phone: r[colPhone] ? String(r[colPhone]).trim() : '',
+        building: r[colBuilding] ? String(r[colBuilding]).trim() : 'Tòa Nhà',
+        room: r[colRoom] ? String(r[colRoom]).trim() : '',
+        address: r[colAddress] ? String(r[colAddress]).trim() : '',
+        note: r[colNote] ? String(r[colNote]).trim() : '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  // Also synthesize customers from Orders if customer list was sparse
+  for (const o of restoredOrders) {
+    const exists = restoredCustomers.some(
+      (c) => (c.phone && c.phone === o.customer_phone) || (c.room === o.customer_room && c.building === o.customer_building)
+    );
+    if (!exists && (o.customer_name || o.customer_room)) {
+      restoredCustomers.push({
+        customer_id: o.customer_id,
+        customer_code: `CD-${o.customer_room || o.customer_phone || restoredCustomers.length + 1}`,
+        name: o.customer_name,
+        phone: o.customer_phone,
+        building: o.customer_building,
+        room: o.customer_room,
+        address: `${o.customer_building} - ${o.customer_room}`,
+        note: o.note || '',
+        created_at: o.created_at,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  // ----------------------------------------------------
+  // PARSE PRODUCTS TAB
+  // ----------------------------------------------------
+  const productsRows = findSheetRows(SHEET_NAMES.PRODUCTS, ['danh mục', 'hải sản', 'sản phẩm', 'products', 'bảng giá']);
+  const restoredProducts: Product[] = [];
+
+  if (productsRows.length > 1) {
+    const pHeaders = (productsRows[0] || []).map((h: any) => String(h || '').trim());
+    const colSku = findColIndex(pHeaders, ['mã sku', 'sku', 'mã'], 0);
+    const colPName = findColIndex(pHeaders, ['tên hải sản', 'tên sản phẩm', 'sản phẩm', 'tên'], 1);
+    const colCategory = findColIndex(pHeaders, ['loại', 'danh mục', 'phân loại'], 2);
+    const colSize = findColIndex(pHeaders, ['quy cách', 'kích cỡ', 'size'], 3);
+    const colOrigin = findColIndex(pHeaders, ['xuất xứ', 'nguồn gốc', 'quê'], 4);
+    const colUnit = findColIndex(pHeaders, ['đơn vị tính', 'đơn vị', 'đvt'], 5);
+    const colPrice = findColIndex(pHeaders, ['giá bán', 'giá', 'đơn giá', 'giá mặc định'], 6);
+    const colStatus = findColIndex(pHeaders, ['trạng thái', 'tình trạng'], 7);
+    const colDesc = findColIndex(pHeaders, ['mô tả', 'ghi chú'], 8);
+
+    for (let i = 1; i < productsRows.length; i++) {
+      const r = productsRows[i];
+      if (!r || r.length === 0) continue;
+      const sku = String(r[colSku] || '').trim();
+      const pName = String(r[colPName] || '').trim();
+      if (!sku && !pName) continue;
+
+      const effectiveSku = sku || `SKU-${String(i).padStart(3, '0')}`;
+      restoredProducts.push({
+        product_id: `PROD-${effectiveSku}`,
+        sku: effectiveSku,
+        product_name: pName || 'Hải Sản Tươi',
+        category: r[colCategory] ? String(r[colCategory]).trim() : 'Hải sản',
+        size: r[colSize] ? String(r[colSize]).trim() : '',
+        origin: r[colOrigin] ? String(r[colOrigin]).trim() : '',
+        unit: (r[colUnit] ? String(r[colUnit]).trim() : 'kg') as any,
+        default_price: parseFloat(String(r[colPrice] || '0').replace(/[^\d.]/g, '')) || 0,
+        status: String(r[colStatus] || '').includes('ngưng') ? 'INACTIVE' : 'ACTIVE',
+        description: r[colDesc] ? String(r[colDesc]).trim() : '',
+      });
+    }
+  }
+
+  // ----------------------------------------------------
+  // PERSIST RESTORED DATA TO STORAGE
+  // ----------------------------------------------------
   if (restoredProducts.length > 0) {
-    (storage as any).set('seafood_app_products_v1', restoredProducts);
+    storage.saveProducts(restoredProducts);
   }
   if (restoredCustomers.length > 0) {
-    (storage as any).set('seafood_app_customers_v1', restoredCustomers);
+    storage.saveCustomers(restoredCustomers);
   }
   if (restoredBatches.length > 0) {
-    (storage as any).set('seafood_app_batches_v1', restoredBatches);
+    storage.saveBatches(restoredBatches);
+    // Set active batch ID to the first restored batch
+    storage.setCurrentBatchId(restoredBatches[0].batch_id);
   }
   if (restoredOrders.length > 0) {
-    (storage as any).set('seafood_app_orders_v1', restoredOrders);
+    storage.saveOrders(restoredOrders);
   }
 
   const now = new Date().toISOString();

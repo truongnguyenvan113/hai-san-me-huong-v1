@@ -69,7 +69,7 @@ interface AppContextType {
   autoSyncEnabled: boolean;
   setAutoSyncEnabled: (enabled: boolean) => void;
   triggerSyncNow: () => Promise<boolean>;
-  pullFromSheets: () => Promise<RestoreStats | null>;
+  pullFromSheets: (targetSpreadsheetId?: string) => Promise<RestoreStats | null>;
   exportSettingsToSheets: () => Promise<boolean>;
   setSpreadsheetInfo: (id: string, url: string) => void;
 
@@ -298,8 +298,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // REVERSE SYNC / PULL from Google Sheets back into app
-  const pullFromSheets = async (): Promise<RestoreStats | null> => {
-    const activeSpreadsheetId = spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+  const pullFromSheets = async (targetSpreadsheetId?: string): Promise<RestoreStats | null> => {
+    const activeSpreadsheetId = targetSpreadsheetId || spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
     if (!activeSpreadsheetId) {
       addToast('error', 'Chưa có Google Sheets', 'Vui lòng liên kết tệp Google Sheets trước khi tải dữ liệu');
       return null;
@@ -316,11 +316,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setSyncStatus('SYNCING');
       const restoreStats = await pullAndRestoreFromGoogleSheets(activeSpreadsheetId);
       refreshData();
+      
+      // Select the first batch if any batches were restored
+      const latestBatches = storage.getBatches();
+      if (latestBatches.length > 0) {
+        setSelectedBatchId(latestBatches[0].batch_id);
+        storage.setCurrentBatchId(latestBatches[0].batch_id);
+      }
+
       setSyncStatus('SYNCED');
       addToast(
         'success',
-        'Đã đồng bộ ngược từ Sheets thành công',
-        `Đã nạp: ${restoreStats.ordersCount} đơn hàng, ${restoreStats.batchesCount} đợt gom, ${restoreStats.customersCount} cư dân, ${restoreStats.productsCount} hải sản & Cấu hình hệ thống!`
+        'Đã nạp dữ liệu từ Google Sheets thành công',
+        `Đã nạp: ${restoreStats.batchesCount} đợt gom, ${restoreStats.ordersCount} đơn hàng, ${restoreStats.customersCount} cư dân, ${restoreStats.productsCount} hải sản!`
       );
       return restoreStats;
     } catch (err: any) {
