@@ -415,12 +415,27 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6 bg-slate-50/50">
           {errorMessage && (
-            <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3 text-xs text-rose-800 shadow-xs">
-              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <div className="font-bold text-rose-900">Lỗi thao tác Google Sheets</div>
-                <div className="font-medium">{errorMessage}</div>
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-800 shadow-xs">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold text-rose-900">Lỗi thao tác Google Sheets</div>
+                  <div className="font-medium leading-relaxed">{errorMessage}</div>
+                </div>
               </div>
+              {(errorMessage.includes('hết hạn') ||
+                errorMessage.includes('xác thực') ||
+                errorMessage.includes('authentication') ||
+                errorMessage.includes('đăng nhập')) && (
+                <button
+                  type="button"
+                  onClick={handleSignIn}
+                  disabled={isAuthLoading}
+                  className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-800 text-white font-bold rounded-xl text-xs shrink-0 self-start sm:self-center transition-colors cursor-pointer shadow-xs"
+                >
+                  {isAuthLoading ? 'Đang xác thực...' : '🔑 Đăng nhập lại ngay'}
+                </button>
+              )}
             </div>
           )}
 

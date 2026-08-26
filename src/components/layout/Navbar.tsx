@@ -96,6 +96,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
               ? 'bg-amber-50 text-amber-900 border-amber-300 ring-2 ring-amber-200 animate-pulse'
               : syncStatus === 'SYNCED'
               ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-300'
+              : syncStatus === 'UNAUTHENTICATED'
+              ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
+              : syncStatus === 'ERROR'
+              ? 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200'
               : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
           }`}
           title={
@@ -103,7 +107,9 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
               ? 'Đang tự động lưu lên Google Sheets...'
               : syncStatus === 'SYNCED'
               ? 'Tự động đồng bộ Google Sheets: Đã cập nhật mới nhất'
-              : 'Đồng bộ dữ liệu sang Google Sheets (6 Sheets Tab)'
+              : syncStatus === 'UNAUTHENTICATED'
+              ? 'Chưa đăng nhập Google hoặc phiên đã hết hạn - Nhấn để kết nối lại'
+              : 'Đồng bộ dữ liệu sang Google Sheets (7 Sheets Tabs)'
           }
         >
           {syncStatus === 'SYNCING' ? (
@@ -117,11 +123,18 @@ export const Navbar: React.FC<NavbarProps> = ({ onToggleSidebar }) => {
               ? 'Đang lưu Sheets...'
               : syncStatus === 'SYNCED'
               ? 'Đã đồng bộ Sheets'
+              : syncStatus === 'UNAUTHENTICATED'
+              ? 'Kết nối Sheets'
+              : syncStatus === 'ERROR'
+              ? 'Lỗi Sheets'
               : 'Google Sheets'}
           </span>
 
           {syncStatus === 'SYNCED' && (
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+          )}
+          {syncStatus === 'UNAUTHENTICATED' && (
+            <span className="w-2 h-2 rounded-full bg-amber-400"></span>
           )}
         </button>
 

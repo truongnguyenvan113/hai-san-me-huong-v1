@@ -1,5 +1,5 @@
 import { Order, Batch, Customer, Product, StoreSettings } from '../types';
-import { getAccessToken } from './googleAuth';
+import { getAccessToken, setAccessTokenInMemory } from './googleAuth';
 import { storage } from './storage';
 
 export interface SyncStats {
@@ -51,6 +51,19 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}) {
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     const message = errorData?.error?.message || `HTTP error ${res.status}: ${res.statusText}`;
+
+    // Handle expired or invalid access token
+    if (
+      res.status === 401 ||
+      res.status === 403 ||
+      errorData?.error?.status === 'UNAUTHENTICATED' ||
+      message.toLowerCase().includes('authentication credentials') ||
+      message.toLowerCase().includes('invalid credentials')
+    ) {
+      setAccessTokenInMemory(null);
+      throw new Error('Phiên đăng nhập Google đã hết hạn hoặc mã xác thực không hợp lệ. Vui lòng nhấn "Đăng nhập lại" để làm mới phiên.');
+    }
+
     throw new Error(`Lỗi Google Sheets API: ${message}`);
   }
 

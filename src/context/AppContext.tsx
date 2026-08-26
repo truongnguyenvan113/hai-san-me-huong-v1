@@ -283,7 +283,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false;
     } catch (err: any) {
       console.warn('Auto-sync Google Sheets notice:', err?.message);
-      setSyncStatus('ERROR');
+      const isAuthErr =
+        err?.message?.includes('hết hạn') ||
+        err?.message?.includes('đăng nhập') ||
+        err?.message?.includes('authentication credentials') ||
+        err?.message?.includes('UNAUTHENTICATED');
+      setSyncStatus(isAuthErr ? 'UNAUTHENTICATED' : 'ERROR');
       return false;
     }
   };
@@ -320,7 +325,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return restoreStats;
     } catch (err: any) {
       console.error('Lỗi khi nạp dữ liệu từ Google Sheets:', err);
-      setSyncStatus('ERROR');
+      const isAuthErr =
+        err?.message?.includes('hết hạn') ||
+        err?.message?.includes('đăng nhập') ||
+        err?.message?.includes('authentication credentials') ||
+        err?.message?.includes('UNAUTHENTICATED');
+      setSyncStatus(isAuthErr ? 'UNAUTHENTICATED' : 'ERROR');
       addToast('error', 'Lỗi đồng bộ từ Sheets', err?.message || 'Không thể đọc dữ liệu từ tệp Google Sheets');
       return null;
     }
@@ -346,6 +356,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast('success', 'Đã lưu cấu hình lên Google Sheets', 'Tab "Cấu Hình Hệ Thống" đã được cập nhật!');
       return true;
     } catch (err: any) {
+      const isAuthErr =
+        err?.message?.includes('hết hạn') ||
+        err?.message?.includes('đăng nhập') ||
+        err?.message?.includes('authentication credentials') ||
+        err?.message?.includes('UNAUTHENTICATED');
+      if (isAuthErr) setSyncStatus('UNAUTHENTICATED');
       addToast('error', 'Lỗi xuất cấu hình', err?.message || 'Không thể ghi cấu hình lên Google Sheets');
       return false;
     }
