@@ -7,7 +7,11 @@ import {
   AuditLog,
   StoreSettings,
   OrderItem,
-  BatchItemSummary
+  BatchItemSummary,
+  BackupSnapshot,
+  BackupData,
+  SnapshotTrigger,
+  DiffComparisonResult
 } from '../types';
 
 const STORAGE_KEYS = {
@@ -19,6 +23,8 @@ const STORAGE_KEYS = {
   AUDIT_LOGS: 'seafood_app_audit_logs_v1',
   SETTINGS: 'seafood_app_settings_v1',
   CURRENT_BATCH_ID: 'seafood_app_current_batch_id_v1',
+  SNAPSHOTS: 'seafood_app_snapshots_v1',
+  LAST_AUTO_BACKUP: 'seafood_app_last_auto_backup_v1',
 };
 
 export const DEFAULT_SETTINGS: StoreSettings = {
@@ -677,6 +683,322 @@ class StorageService {
       console.error('Import data failed:', e);
       return false;
     }
+  }
+
+  // Snapshot Backup & Diff Comparison Engine
+  public getSnapshots(): BackupSnapshot[] {
+    return this.get<BackupSnapshot[]>(STORAGE_KEYS.SNAPSHOTS, []);
+  }
+
+  public saveSnapshots(snapshots: BackupSnapshot[]): void {
+    // Keep up to 30 most recent snapshots
+    this.set(STORAGE_KEYS.SNAPSHOTS, snapshots.slice(0, 30));
+  }
+
+  public getCurrentBackupData(): BackupData {
+    return {
+      orders: this.getOrders(),
+      batches: this.getBatches(),
+      customers: this.getCustomers(),
+      products: this.getProducts(),
+      storeSettings: this.getSettings(),
+      activeBatchId: this.getCurrentBatchId() || undefined,
+      exportedAt: new Date().toISOString(),
+    };
+  }
+
+  public createSnapshot(
+    trigger: SnapshotTrigger = 'MANUAL',
+    customTitle?: string
+  ): BackupSnapshot {
+    const data = this.getCurrentBackupData();
+    const activeBatch = data.batches.find(b => b.batch_id === data.activeBatchId) || data.batches[0];
+    const totalRevenue = data.orders
+      .filter(o => o.status !== 'CANCELLED')
+      .reduce((sum, o) => sum + (o.total || 0), 0);
+
+    const titleMap: Record<SnapshotTrigger, string> = {
+      AUTO_2H: 'Sao lưu tự động định kỳ (Mỗi 2 giờ)',
+      MANUAL: customTitle || 'Điểm sao lưu thủ công',
+      BEFORE_ACCOUNT_SWITCH: 'Tự động lưu trước khi chuyển đổi / đăng xuất tài khoản Google',
+      BEFORE_RESTORE: 'Tự động lưu trước khi nạp dữ liệu mới / khôi phục',
+      BEFORE_SHEETS_PULL: 'Tự động lưu trước khi đồng bộ ngược từ Google Sheets',
+    };
+
+    const newSnapshot: BackupSnapshot = {
+      id: `snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      trigger,
+      title: customTitle || titleMap[trigger] || 'Bản sao lưu dữ liệu',
+      summary: {
+        ordersCount: data.orders.length,
+        batchesCount: data.batches.length,
+        customersCount: data.customers.length,
+        productsCount: data.products.length,
+        totalRevenue,
+        activeBatchName: activeBatch ? activeBatch.batch_name : undefined,
+      },
+      data,
+    };
+
+    const currentSnapshots = this.getSnapshots();
+    this.saveSnapshots([newSnapshot, ...currentSnapshots]);
+
+    if (trigger === 'AUTO_2H') {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(STORAGE_KEYS.LAST_AUTO_BACKUP, Date.now().toString());
+      }
+    }
+
+    this.logAudit(
+      'SNAPSHOT_CREATED',
+      'SETTINGS',
+      newSnapshot.id,
+      `Đã tạo bản sao lưu (${newSnapshot.title}) gồm ${data.orders.length} đơn hàng, ${data.batches.length} đợt gom`
+    );
+
+    return newSnapshot;
+  }
+
+  public deleteSnapshot(snapshotId: string): boolean {
+    const list = this.getSnapshots();
+    const filtered = list.filter(s => s.id !== snapshotId);
+    if (filtered.length !== list.length) {
+      this.saveSnapshots(filtered);
+      return true;
+    }
+    return false;
+  }
+
+  public clearAllSnapshots(): void {
+    this.set(STORAGE_KEYS.SNAPSHOTS, []);
+  }
+
+  // Restore whole state from a snapshot
+  public restoreFromSnapshot(snapshot: BackupSnapshot, saveBackupFirst = true): boolean {
+    if (!snapshot || !snapshot.data) return false;
+
+    if (saveBackupFirst) {
+      this.createSnapshot('BEFORE_RESTORE', `Lưu an toàn trước khi khôi phục bản [${new Date(snapshot.timestamp).toLocaleString('vi-VN')}]`);
+    }
+
+    const { products, customers, batches, orders, storeSettings, activeBatchId } = snapshot.data;
+    if (products) this.set(STORAGE_KEYS.PRODUCTS, products);
+    if (customers) this.set(STORAGE_KEYS.CUSTOMERS, customers);
+    if (batches) this.set(STORAGE_KEYS.BATCHES, batches);
+    if (orders) this.set(STORAGE_KEYS.ORDERS, orders);
+    if (storeSettings) this.set(STORAGE_KEYS.SETTINGS, storeSettings);
+    if (activeBatchId) this.set(STORAGE_KEYS.CURRENT_BATCH_ID, activeBatchId);
+
+    this.logAudit(
+      'RESTORE_SNAPSHOT',
+      'SETTINGS',
+      snapshot.id,
+      `Khôi phục thành công từ bản sao lưu: ${snapshot.title} (${new Date(snapshot.timestamp).toLocaleString('vi-VN')})`
+    );
+
+    return true;
+  }
+
+  // Smart Merge data from a snapshot without destroying existing records
+  public mergeFromSnapshot(snapshot: BackupSnapshot): {
+    restoredOrders: number;
+    restoredBatches: number;
+    restoredCustomers: number;
+    restoredProducts: number;
+  } {
+    if (!snapshot || !snapshot.data) {
+      return { restoredOrders: 0, restoredBatches: 0, restoredCustomers: 0, restoredProducts: 0 };
+    }
+
+    this.createSnapshot('BEFORE_RESTORE', `Lưu an toàn trước khi gộp dữ liệu từ bản [${new Date(snapshot.timestamp).toLocaleString('vi-VN')}]`);
+
+    const currentProducts = this.getProducts();
+    const currentCustomers = this.getCustomers();
+    const currentBatches = this.getBatches();
+    const currentOrders = this.getOrders();
+
+    let addedBatches = 0;
+    let addedOrders = 0;
+    let addedCustomers = 0;
+    let addedProducts = 0;
+
+    // Merge Batches
+    const mergedBatches = [...currentBatches];
+    for (const b of snapshot.data.batches || []) {
+      if (!mergedBatches.some(curr => curr.batch_id === b.batch_id || curr.batch_code === b.batch_code)) {
+        mergedBatches.push(b);
+        addedBatches++;
+      }
+    }
+
+    // Merge Orders
+    const mergedOrders = [...currentOrders];
+    for (const o of snapshot.data.orders || []) {
+      if (!mergedOrders.some(curr => curr.order_id === o.order_id || curr.order_code === o.order_code)) {
+        mergedOrders.push(o);
+        addedOrders++;
+      }
+    }
+
+    // Merge Customers
+    const mergedCustomers = [...currentCustomers];
+    for (const c of snapshot.data.customers || []) {
+      if (!mergedCustomers.some(curr => (curr.phone && curr.phone === c.phone) || (curr.room === c.room && curr.building === c.building))) {
+        mergedCustomers.push(c);
+        addedCustomers++;
+      }
+    }
+
+    // Merge Products
+    const mergedProducts = [...currentProducts];
+    for (const p of snapshot.data.products || []) {
+      if (!mergedProducts.some(curr => curr.sku === p.sku || curr.product_name.toLowerCase() === p.product_name.toLowerCase())) {
+        mergedProducts.push(p);
+        addedProducts++;
+      }
+    }
+
+    this.saveBatches(mergedBatches);
+    this.saveOrders(mergedOrders);
+    this.saveCustomers(mergedCustomers);
+    this.saveProducts(mergedProducts);
+
+    return {
+      restoredBatches: addedBatches,
+      restoredOrders: addedOrders,
+      restoredCustomers: addedCustomers,
+      restoredProducts: addedProducts,
+    };
+  }
+
+  // Periodic 2-Hour Auto-Backup Checker
+  public checkAndTriggerAutoBackup(intervalHours = 2): BackupSnapshot | null {
+    if (typeof window === 'undefined') return null;
+
+    const lastBackupStr = localStorage.getItem(STORAGE_KEYS.LAST_AUTO_BACKUP);
+    const lastBackupTime = lastBackupStr ? parseInt(lastBackupStr, 10) : 0;
+    const now = Date.now();
+    const intervalMs = intervalHours * 60 * 60 * 1000;
+
+    // Check if enough time has passed and there is actual data in the app
+    const hasData = this.getOrders().length > 0 || this.getBatches().length > 0;
+    if (hasData && (now - lastBackupTime >= intervalMs || !lastBackupStr)) {
+      return this.createSnapshot('AUTO_2H');
+    }
+
+    return null;
+  }
+
+  // Visual Diff Comparison between current data and any backup data
+  public compareDataDiff(
+    currentData: BackupData,
+    snapshotData: BackupData
+  ): DiffComparisonResult {
+    const currentOrders = currentData.orders || [];
+    const snapshotOrders = snapshotData.orders || [];
+    const currentBatches = currentData.batches || [];
+    const snapshotBatches = snapshotData.batches || [];
+    const currentCustomers = currentData.customers || [];
+    const snapshotCustomers = snapshotData.customers || [];
+    const currentProducts = currentData.products || [];
+    const snapshotProducts = snapshotData.products || [];
+
+    const currentRevenue = currentOrders
+      .filter(o => o.status !== 'CANCELLED')
+      .reduce((sum, o) => sum + (o.total || 0), 0);
+    const snapshotRevenue = snapshotOrders
+      .filter(o => o.status !== 'CANCELLED')
+      .reduce((sum, o) => sum + (o.total || 0), 0);
+
+    // Batches Diff
+    const onlyInCurrentBatches = currentBatches.filter(
+      cb => !snapshotBatches.some(sb => sb.batch_id === cb.batch_id || sb.batch_code === cb.batch_code)
+    );
+    const onlyInSnapshotBatches = snapshotBatches.filter(
+      sb => !currentBatches.some(cb => cb.batch_id === sb.batch_id || cb.batch_code === sb.batch_code)
+    );
+    const commonBatches = currentBatches
+      .map(cb => {
+        const match = snapshotBatches.find(sb => sb.batch_id === cb.batch_id || sb.batch_code === cb.batch_code);
+        return match ? { current: cb, snapshot: match } : null;
+      })
+      .filter(Boolean) as { current: Batch; snapshot: Batch }[];
+
+    // Orders Diff
+    const onlyInCurrentOrders = currentOrders.filter(
+      co => !snapshotOrders.some(so => so.order_id === co.order_id || so.order_code === co.order_code)
+    );
+    const onlyInSnapshotOrders = snapshotOrders.filter(
+      so => !currentOrders.some(co => co.order_id === so.order_id || co.order_code === so.order_code)
+    );
+    const commonOrders = currentOrders
+      .map(co => {
+        const match = snapshotOrders.find(so => so.order_id === co.order_id || so.order_code === co.order_code);
+        return match ? { current: co, snapshot: match } : null;
+      })
+      .filter(Boolean) as { current: Order; snapshot: Order }[];
+
+    // Customers Diff
+    const onlyInCurrentCustomers = currentCustomers.filter(
+      cc => !snapshotCustomers.some(sc => (sc.phone && sc.phone === cc.phone) || (sc.room === cc.room && sc.building === cc.building))
+    );
+    const onlyInSnapshotCustomers = snapshotCustomers.filter(
+      sc => !currentCustomers.some(cc => (cc.phone && cc.phone === sc.phone) || (cc.room === sc.room && cc.building === sc.building))
+    );
+
+    // Products Diff
+    const onlyInCurrentProducts = currentProducts.filter(
+      cp => !snapshotProducts.some(sp => sp.sku === cp.sku || sp.product_name.toLowerCase() === cp.product_name.toLowerCase())
+    );
+    const onlyInSnapshotProducts = snapshotProducts.filter(
+      sp => !currentProducts.some(cp => cp.sku === sp.sku || cp.product_name.toLowerCase() === sp.product_name.toLowerCase())
+    );
+
+    // Settings Diff
+    const currSet = currentData.storeSettings || DEFAULT_SETTINGS;
+    const snapSet = snapshotData.storeSettings || DEFAULT_SETTINGS;
+
+    return {
+      currentStats: {
+        ordersCount: currentOrders.length,
+        batchesCount: currentBatches.length,
+        customersCount: currentCustomers.length,
+        productsCount: currentProducts.length,
+        totalRevenue: currentRevenue,
+      },
+      snapshotStats: {
+        ordersCount: snapshotOrders.length,
+        batchesCount: snapshotBatches.length,
+        customersCount: snapshotCustomers.length,
+        productsCount: snapshotProducts.length,
+        totalRevenue: snapshotRevenue,
+      },
+      batchesDiff: {
+        onlyInCurrent: onlyInCurrentBatches,
+        onlyInSnapshot: onlyInSnapshotBatches,
+        common: commonBatches,
+      },
+      ordersDiff: {
+        onlyInCurrent: onlyInCurrentOrders,
+        onlyInSnapshot: onlyInSnapshotOrders,
+        common: commonOrders,
+      },
+      customersDiff: {
+        onlyInCurrent: onlyInCurrentCustomers,
+        onlyInSnapshot: onlyInSnapshotCustomers,
+      },
+      productsDiff: {
+        onlyInCurrent: onlyInCurrentProducts,
+        onlyInSnapshot: onlyInSnapshotProducts,
+      },
+      settingsDiff: {
+        storeNameChanged: currSet.store_name !== snapSet.store_name,
+        bankChanged: currSet.bank_account !== snapSet.bank_account || currSet.bank_name !== snapSet.bank_name,
+        currentBank: `${currSet.bank_name || 'ABBANK'} - ${currSet.bank_account || '(Chưa nhập)'}`,
+        snapshotBank: `${snapSet.bank_name || 'ABBANK'} - ${snapSet.bank_account || '(Chưa nhập)'}`,
+      },
+    };
   }
 
   public resetToSampleData(): void {

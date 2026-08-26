@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { StoreSettings } from '../../types';
+import { StoreSettings, BackupSnapshot } from '../../types';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { BackupCompareModal } from './BackupCompareModal';
 import {
   Settings,
   Store,
@@ -21,6 +22,13 @@ import {
   ArrowUpFromLine,
   Building2,
   Check,
+  History,
+  GitCompare,
+  Clock,
+  ShieldCheck,
+  RotateCcw,
+  GitMerge,
+  Trash2,
 } from 'lucide-react';
 import { ALL_BANKS, getBankByCodeOrName } from '../../utils/banks';
 
@@ -36,6 +44,14 @@ export const SettingsView: React.FC = () => {
     pullFromSheets,
     exportSettingsToSheets,
     spreadsheetId,
+    snapshots,
+    createSnapshot,
+    deleteSnapshot,
+    restoreFromSnapshot,
+    isCompareModalOpen,
+    setIsCompareModalOpen,
+    selectedCompareSnapshot,
+    setSelectedCompareSnapshot,
   } = useApp();
 
   const [formData, setFormData] = useState<StoreSettings>({ ...storeSettings });
@@ -43,6 +59,8 @@ export const SettingsView: React.FC = () => {
   const [isPullConfirmOpen, setIsPullConfirmOpen] = useState(false);
   const [isExportingSheets, setIsExportingSheets] = useState(false);
   const [isPullingSheets, setIsPullingSheets] = useState(false);
+  const [snapshotToRestore, setSnapshotToRestore] = useState<BackupSnapshot | null>(null);
+  const [isQuickRestoreConfirmOpen, setIsQuickRestoreConfirmOpen] = useState(false);
 
   const handleBank1Change = (bankCodeOrName: string) => {
     const bank = getBankByCodeOrName(bankCodeOrName);
@@ -522,52 +540,220 @@ export const SettingsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Section 5: Data Management & Backup */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        <div className="flex items-center gap-2 text-slate-900 font-black text-base pb-3 border-b border-slate-100">
-          <Database className="w-5 h-5 text-slate-700" /> Quản Lý Dữ Liệu & Sao Lưu
+      {/* Section 5: Data Management, Automatic 2h Snapshots & Google Switch Protection */}
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center gap-2 text-slate-900 font-black text-base">
+              <Database className="w-5 h-5 text-slate-700" /> Quản Lý Dữ Liệu, Sao Lưu & Đối Chiếu Bản Ghi
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Hệ thống tự động sao lưu định kỳ 2 giờ/lần và giữ nguyên dữ liệu nguồn khi chuyển đổi tài khoản Google.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCompareSnapshot(snapshots.length > 0 ? snapshots[0] : null);
+                setIsCompareModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-4 py-2 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs rounded-xl shadow-sm transition-all cursor-pointer"
+            >
+              <GitCompare className="w-4 h-4 text-teal-300" /> Mở Bảng So Sánh & Khôi Phục
+            </button>
+            <button
+              type="button"
+              onClick={() => createSnapshot('MANUAL', 'Sao lưu thủ công từ Cài đặt')}
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition-colors cursor-pointer border border-slate-200"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" /> + Tạo Điểm Sao Lưu
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <button
-            id="export-backup-btn"
-            type="button"
-            onClick={exportDataAsJSON}
-            className="p-4 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 text-left transition-colors flex flex-col justify-between cursor-pointer"
-          >
-            <div className="flex items-center gap-2 text-slate-900 font-bold text-xs">
-              <Download className="w-4 h-4 text-teal-800" /> Sao Lưu Dữ Liệu (JSON)
+        {/* Protection Assurance Banner */}
+        <div className="p-4 bg-gradient-to-r from-teal-50 via-emerald-50 to-indigo-50 rounded-2xl border border-teal-200/80 space-y-2">
+          <div className="flex items-center gap-2 text-teal-950 font-black text-xs sm:text-sm">
+            <ShieldCheck className="w-5 h-5 text-teal-700 shrink-0" /> Cơ Chế Bảo Toàn Dữ Liệu Nguồn Khi Đổi Tài Khoản Google
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-slate-700 pt-1">
+            <div className="p-2.5 bg-white/80 rounded-xl border border-teal-100 space-y-1">
+              <div className="font-bold text-teal-900 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-teal-700" /> Sao lưu 2 giờ / lần
+              </div>
+              <div className="text-[11px] text-slate-600">
+                Tự động chụp snapshot toàn bộ đơn hàng, cư dân và cấu hình sau mỗi 2 tiếng làm việc.
+              </div>
             </div>
-            <p className="text-[11px] text-slate-500 mt-2">
-              Tải toàn bộ đơn hàng, cư dân, đợt hàng và cấu hình về máy tính.
-            </p>
-          </button>
 
-          <label className="p-4 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 text-left transition-colors flex flex-col justify-between cursor-pointer">
-            <div className="flex items-center gap-2 text-slate-900 font-bold text-xs">
-              <Upload className="w-4 h-4 text-indigo-700" /> Khôi Phục Từ File JSON
+            <div className="p-2.5 bg-white/80 rounded-xl border border-teal-100 space-y-1">
+              <div className="font-bold text-teal-900 flex items-center gap-1">
+                <History className="w-3.5 h-3.5 text-teal-700" /> Tạm giữ khi đăng xuất Google
+              </div>
+              <div className="text-[11px] text-slate-600">
+                Trước khi đăng xuất để đổi tài khoản Google mới, hệ thống tự động lưu 1 bản <b>BEFORE_ACCOUNT_SWITCH</b> để không bị mất thông tin.
+              </div>
             </div>
-            <p className="text-[11px] text-slate-500 mt-2">
-              Nhập tệp dữ liệu đã sao lưu trước đó vào hệ thống.
-            </p>
-            <input type="file" accept=".json" onChange={handleFileImport} className="hidden" />
-          </label>
 
-          <button
-            id="reset-sample-data-btn"
-            type="button"
-            onClick={() => setIsResetConfirmOpen(true)}
-            className="p-4 bg-rose-50/50 hover:bg-rose-100/50 rounded-xl border border-rose-200 text-left transition-colors flex flex-col justify-between cursor-pointer"
-          >
-            <div className="flex items-center gap-2 text-rose-800 font-bold text-xs">
-              <RefreshCw className="w-4 h-4" /> Nạp Lại Dữ Liệu Mẫu
+            <div className="p-2.5 bg-white/80 rounded-xl border border-teal-100 space-y-1">
+              <div className="font-bold text-teal-900 flex items-center gap-1">
+                <GitCompare className="w-3.5 h-3.5 text-teal-700" /> Đối chiếu & Khôi phục thông minh
+              </div>
+              <div className="text-[11px] text-slate-600">
+                Khi kết nối tài khoản Google mới chưa có dữ liệu, bạn có thể so sánh trực tiếp và bấm khôi phục hoặc gộp vào chỉ với 1 click.
+              </div>
             </div>
-            <p className="text-[11px] text-rose-700/80 mt-2">
-              Xóa sạch và tạo lại đợt hàng mẫu, danh sách phòng cư dân và hải sản.
-            </p>
-          </button>
+          </div>
+        </div>
+
+        {/* Snapshot History Table / Cards */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+            <span className="flex items-center gap-1.5">
+              <History className="w-4 h-4 text-teal-800" /> Danh Sách Bản Sao Lưu Tự Động & Lịch Sử ({snapshots.length})
+            </span>
+            <span className="text-slate-400 font-normal text-[11px]">Lưu tối đa 30 bản gần nhất</span>
+          </div>
+
+          {snapshots.length === 0 ? (
+            <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
+              Chưa có bản sao lưu nào. Hãy bấm nút "+ Tạo Điểm Sao Lưu" ở trên.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-72 overflow-y-auto pr-1">
+              {snapshots.slice(0, 8).map((snap) => {
+                const isAuto = snap.trigger === 'AUTO_2H';
+                const isSwitch = snap.trigger === 'BEFORE_ACCOUNT_SWITCH';
+                return (
+                  <div
+                    key={snap.id}
+                    className="p-3.5 bg-slate-50 hover:bg-slate-100/80 rounded-xl border border-slate-200 transition-colors flex flex-col justify-between space-y-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-bold text-slate-900 line-clamp-1">{snap.title}</div>
+                      <span
+                        className={`px-2 py-0.5 text-[10px] font-bold rounded-full whitespace-nowrap ${
+                          isAuto
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : isSwitch
+                            ? 'bg-purple-100 text-purple-800 border border-purple-300'
+                            : 'bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        {snap.trigger}
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-slate-400" />
+                      {new Date(snap.timestamp).toLocaleString('vi-VN')}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 text-[11px]">
+                      <span className="text-slate-600 font-medium">
+                        {snap.summary.batchesCount} đợt • {snap.summary.ordersCount} đơn • {snap.summary.customersCount} khách
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedCompareSnapshot(snap);
+                            setIsCompareModalOpen(true);
+                          }}
+                          className="px-2 py-1 bg-white hover:bg-teal-50 text-teal-800 font-bold border border-slate-300 rounded-md transition-colors cursor-pointer flex items-center gap-1"
+                          title="So sánh với dữ liệu hiện tại"
+                        >
+                          <GitCompare className="w-3 h-3" /> So sánh
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSnapshotToRestore(snap);
+                            setIsQuickRestoreConfirmOpen(true);
+                          }}
+                          className="px-2 py-1 bg-teal-800 hover:bg-teal-900 text-white font-bold rounded-md transition-colors cursor-pointer flex items-center gap-1"
+                          title="Khôi phục ngay"
+                        >
+                          <RotateCcw className="w-3 h-3" /> Khôi phục
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* JSON Import/Export & Reset Buttons */}
+        <div className="pt-3 border-t border-slate-100">
+          <div className="text-xs font-bold text-slate-700 mb-2">Thao tác dữ liệu tệp tin bổ sung:</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <button
+              id="export-backup-btn"
+              type="button"
+              onClick={exportDataAsJSON}
+              className="p-4 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 text-left transition-colors flex flex-col justify-between cursor-pointer"
+            >
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-xs">
+                <Download className="w-4 h-4 text-teal-800" /> Tải Toàn Bộ Tệp JSON
+              </div>
+              <p className="text-[11px] text-slate-500 mt-2">
+                Tải toàn bộ đơn hàng, cư dân, đợt hàng và cấu hình về máy tính dạng tệp tin .json.
+              </p>
+            </button>
+
+            <label className="p-4 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 text-left transition-colors flex flex-col justify-between cursor-pointer">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-xs">
+                <Upload className="w-4 h-4 text-indigo-700" /> Khôi Phục Từ File JSON Ngoài
+              </div>
+              <p className="text-[11px] text-slate-500 mt-2">
+                Chọn tệp .json từ máy tính để nạp lại vào phần mềm.
+              </p>
+              <input type="file" accept=".json" onChange={handleFileImport} className="hidden" />
+            </label>
+
+            <button
+              id="reset-sample-data-btn"
+              type="button"
+              onClick={() => setIsResetConfirmOpen(true)}
+              className="p-4 bg-rose-50/50 hover:bg-rose-100/50 rounded-xl border border-rose-200 text-left transition-colors flex flex-col justify-between cursor-pointer"
+            >
+              <div className="flex items-center gap-2 text-rose-800 font-bold text-xs">
+                <RefreshCw className="w-4 h-4" /> Nạp Lại Dữ Liệu Mẫu
+              </div>
+              <p className="text-[11px] text-rose-700/80 mt-2">
+                Xóa sạch và tạo lại đợt hàng mẫu, danh sách phòng cư dân và hải sản.
+              </p>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Snapshot Diff & Compare Modal */}
+      <BackupCompareModal
+        isOpen={isCompareModalOpen}
+        onClose={() => setIsCompareModalOpen(false)}
+        initialSnapshot={selectedCompareSnapshot}
+      />
+
+      {/* Quick Restore Snapshot Confirmation */}
+      <ConfirmModal
+        isOpen={isQuickRestoreConfirmOpen}
+        onClose={() => setIsQuickRestoreConfirmOpen(false)}
+        onConfirm={() => {
+          if (snapshotToRestore) {
+            restoreFromSnapshot(snapshotToRestore, true);
+            setFormData({ ...storeSettings });
+            setIsQuickRestoreConfirmOpen(false);
+          }
+        }}
+        title="Xác nhận khôi phục từ bản sao lưu"
+        message={`Hệ thống sẽ tự động lưu dự phòng dữ liệu hiện tại, sau đó khôi phục toàn bộ ${snapshotToRestore?.summary.ordersCount} đơn hàng và ${snapshotToRestore?.summary.batchesCount} đợt gom từ bản "${snapshotToRestore?.title}". Bạn có muốn tiếp tục?`}
+        confirmText="Khôi phục ngay"
+      />
 
       <ConfirmModal
         isOpen={isResetConfirmOpen}

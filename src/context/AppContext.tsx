@@ -7,7 +7,11 @@ import {
   PaymentTransaction,
   AuditLog,
   StoreSettings,
-  BatchItemSummary
+  BatchItemSummary,
+  BackupSnapshot,
+  BackupData,
+  SnapshotTrigger,
+  DiffComparisonResult
 } from '../types';
 import { storage } from '../services/storage';
 import { autoSyncAll, pullAndRestoreFromGoogleSheets, exportSettingsToGoogleSheets, SyncStats, RestoreStats } from '../services/googleSheets';
@@ -86,6 +90,10 @@ interface AppContextType {
   setIsAIScanOpen: (open: boolean) => void;
   isSheetsSyncOpen: boolean;
   setIsSheetsSyncOpen: (open: boolean) => void;
+  isCompareModalOpen: boolean;
+  setIsCompareModalOpen: (open: boolean) => void;
+  selectedCompareSnapshot: BackupSnapshot | null;
+  setSelectedCompareSnapshot: (snapshot: BackupSnapshot | null) => void;
   printModalConfig: {
     isOpen: boolean;
     mode: 'SINGLE_ORDER' | 'BATCH_ORDERS' | 'DELIVERY_LIST';
@@ -98,6 +106,20 @@ interface AppContextType {
     orderId?: string;
     batchId?: string;
   }) => void;
+
+  // Snapshots & Safe Backup Comparison
+  snapshots: BackupSnapshot[];
+  createSnapshot: (trigger?: SnapshotTrigger, customTitle?: string) => BackupSnapshot;
+  deleteSnapshot: (snapshotId: string) => void;
+  restoreFromSnapshot: (snapshot: BackupSnapshot, saveBackupFirst?: boolean) => boolean;
+  mergeFromSnapshot: (snapshot: BackupSnapshot) => {
+    restoredOrders: number;
+    restoredBatches: number;
+    restoredCustomers: number;
+    restoredProducts: number;
+  };
+  compareDataDiff: (currentData: BackupData, snapshotData: BackupData) => DiffComparisonResult;
+  getCurrentBackupData: () => BackupData;
 
   // Actions
   updateSettings: (s: StoreSettings) => void;
@@ -180,6 +202,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false);
   const [isAIScanOpen, setIsAIScanOpen] = useState(false);
   const [isSheetsSyncOpen, setIsSheetsSyncOpen] = useState(false);
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
+  const [selectedCompareSnapshot, setSelectedCompareSnapshot] = useState<BackupSnapshot | null>(null);
+  const [snapshots, setSnapshots] = useState<BackupSnapshot[]>(() => storage.getSnapshots());
 
   const [printModalConfig, setPrintModalConfig] = useState<{
     isOpen: boolean;
@@ -484,8 +509,75 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const resetSampleData = () => {
     storage.resetToSampleData();
     refreshData();
+    setSnapshots(storage.getSnapshots());
     addToast('info', 'Khôi phục dữ liệu mẫu', 'Đã nạp lại bộ dữ liệu hải sản mẫu đầy đủ');
   };
+
+  const createSnapshot = (trigger: SnapshotTrigger = 'MANUAL', customTitle?: string) => {
+    const snap = storage.createSnapshot(trigger, customTitle);
+    setSnapshots(storage.getSnapshots());
+    addToast('success', 'Đã tạo bản sao lưu', `${snap.title} (${snap.summary.ordersCount} đơn, ${snap.summary.batchesCount} đợt gom)`);
+    return snap;
+  };
+
+  const deleteSnapshot = (snapshotId: string) => {
+    const success = storage.deleteSnapshot(snapshotId);
+    if (success) {
+      setSnapshots(storage.getSnapshots());
+      addToast('info', 'Đã xóa bản sao lưu', 'Bản sao lưu đã được gỡ khỏi danh sách lưu trữ');
+    }
+  };
+
+  const restoreFromSnapshot = (snapshot: BackupSnapshot, saveBackupFirst = true) => {
+    const ok = storage.restoreFromSnapshot(snapshot, saveBackupFirst);
+    if (ok) {
+      refreshData();
+      setSnapshots(storage.getSnapshots());
+      addToast('success', 'Khôi phục thành công', `Đã khôi phục toàn bộ dữ liệu từ bản [${snapshot.title}]!`);
+    } else {
+      addToast('error', 'Lỗi khôi phục', 'Không thể khôi phục dữ liệu từ bản sao lưu này');
+    }
+    return ok;
+  };
+
+  const mergeFromSnapshot = (snapshot: BackupSnapshot) => {
+    const stats = storage.mergeFromSnapshot(snapshot);
+    refreshData();
+    setSnapshots(storage.getSnapshots());
+    addToast(
+      'success',
+      'Gộp dữ liệu thành công',
+      `Đã bổ sung: +${stats.restoredBatches} đợt gom, +${stats.restoredOrders} đơn hàng, +${stats.restoredCustomers} cư dân!`
+    );
+    return stats;
+  };
+
+  const compareDataDiff = (currentData: BackupData, snapshotData: BackupData) => {
+    return storage.compareDataDiff(currentData, snapshotData);
+  };
+
+  const getCurrentBackupData = () => {
+    return storage.getCurrentBackupData();
+  };
+
+  // Periodic 2-Hour Auto Backup Engine Check
+  useEffect(() => {
+    // Run on startup
+    const initialSnap = storage.checkAndTriggerAutoBackup(2);
+    if (initialSnap) {
+      setSnapshots(storage.getSnapshots());
+    }
+
+    // Check periodically every 5 minutes
+    const interval = setInterval(() => {
+      const autoSnap = storage.checkAndTriggerAutoBackup(2);
+      if (autoSnap) {
+        setSnapshots(storage.getSnapshots());
+      }
+    }, 5 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const exportDataAsJSON = () => {
     const jsonStr = storage.exportAllData();
@@ -503,6 +595,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const ok = storage.importAllData(jsonStr);
     if (ok) {
       refreshData();
+      setSnapshots(storage.getSnapshots());
     }
     return ok;
   };
@@ -561,8 +654,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setIsAIScanOpen,
         isSheetsSyncOpen,
         setIsSheetsSyncOpen,
+        isCompareModalOpen,
+        setIsCompareModalOpen,
+        selectedCompareSnapshot,
+        setSelectedCompareSnapshot,
         printModalConfig,
         setPrintModalConfig,
+        snapshots,
+        createSnapshot,
+        deleteSnapshot,
+        restoreFromSnapshot,
+        mergeFromSnapshot,
+        compareDataDiff,
+        getCurrentBackupData,
         updateSettings,
         updateStoreSettings: updateSettings,
         addProduct,

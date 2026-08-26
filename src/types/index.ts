@@ -224,3 +224,77 @@ export interface StoreSettings {
   default_shipping_fee: number;
   show_vietqr?: boolean;
 }
+
+export type SnapshotTrigger = 
+  | 'AUTO_2H' 
+  | 'MANUAL' 
+  | 'BEFORE_ACCOUNT_SWITCH' 
+  | 'BEFORE_RESTORE' 
+  | 'BEFORE_SHEETS_PULL';
+
+export interface BackupData {
+  orders: Order[];
+  batches: Batch[];
+  customers: Customer[];
+  products: Product[];
+  storeSettings: StoreSettings;
+  activeBatchId?: string;
+  exportedAt: string;
+}
+
+export interface BackupSnapshot {
+  id: string;
+  timestamp: string;
+  trigger: SnapshotTrigger;
+  title: string;
+  summary: {
+    ordersCount: number;
+    batchesCount: number;
+    customersCount: number;
+    productsCount: number;
+    totalRevenue: number;
+    activeBatchName?: string;
+  };
+  data: BackupData;
+}
+
+export interface DiffComparisonResult {
+  currentStats: {
+    ordersCount: number;
+    batchesCount: number;
+    customersCount: number;
+    productsCount: number;
+    totalRevenue: number;
+  };
+  snapshotStats: {
+    ordersCount: number;
+    batchesCount: number;
+    customersCount: number;
+    productsCount: number;
+    totalRevenue: number;
+  };
+  batchesDiff: {
+    onlyInCurrent: Batch[];
+    onlyInSnapshot: Batch[];
+    common: { current: Batch; snapshot: Batch }[];
+  };
+  ordersDiff: {
+    onlyInCurrent: Order[];
+    onlyInSnapshot: Order[];
+    common: { current: Order; snapshot: Order }[];
+  };
+  customersDiff: {
+    onlyInCurrent: Customer[];
+    onlyInSnapshot: Customer[];
+  };
+  productsDiff: {
+    onlyInCurrent: Product[];
+    onlyInSnapshot: Product[];
+  };
+  settingsDiff: {
+    storeNameChanged: boolean;
+    bankChanged: boolean;
+    currentBank: string;
+    snapshotBank: string;
+  };
+}

@@ -1,5 +1,5 @@
 import { Order, Batch, Customer, Product, StoreSettings } from '../types';
-import { getAccessToken, setAccessTokenInMemory } from './googleAuth';
+import { getAccessToken, setAccessTokenInMemory, refreshGoogleSession, isAutoReconnectEnabled } from './googleAuth';
 import { storage } from './storage';
 
 export interface SyncStats {
@@ -33,10 +33,22 @@ export const SHEET_NAMES = {
 };
 
 // Helper: Make authenticated request to Google Sheets API
-async function fetchSheetsApi(endpoint: string, options: RequestInit = {}) {
-  const token = await getAccessToken();
+async function fetchSheetsApi(endpoint: string, options: RequestInit = {}, retryCount = 0): Promise<any> {
+  let token = await getAccessToken();
+  
+  if (!token && isAutoReconnectEnabled()) {
+    try {
+      const refreshed = await refreshGoogleSession();
+      if (refreshed?.accessToken) {
+        token = refreshed.accessToken;
+      }
+    } catch {
+      // Continue to throw below
+    }
+  }
+
   if (!token) {
-    throw new Error('Chưa đăng nhập Google hoặc phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    throw new Error('Chưa đăng nhập Google hoặc phiên đăng nhập đã hết hạn. Vui lòng nhấn "Đăng nhập Google" để tiếp tục.');
   }
 
   const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets${endpoint}`, {
@@ -52,14 +64,27 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}) {
     const errorData = await res.json().catch(() => ({}));
     const message = errorData?.error?.message || `HTTP error ${res.status}: ${res.statusText}`;
 
-    // Handle expired or invalid access token
-    if (
+    // Handle expired or invalid access token with auto-reconnect
+    const isAuthError = 
       res.status === 401 ||
       res.status === 403 ||
       errorData?.error?.status === 'UNAUTHENTICATED' ||
       message.toLowerCase().includes('authentication credentials') ||
-      message.toLowerCase().includes('invalid credentials')
-    ) {
+      message.toLowerCase().includes('invalid credentials');
+
+    if (isAuthError) {
+      if (retryCount === 0 && isAutoReconnectEnabled()) {
+        console.info('Token hết hạn, đang tự động khôi phục phiên kết nối Google...');
+        try {
+          const reauth = await refreshGoogleSession();
+          if (reauth?.accessToken) {
+            return fetchSheetsApi(endpoint, options, 1);
+          }
+        } catch (reauthErr) {
+          console.warn('Tự động khôi phục phiên thất bại:', reauthErr);
+        }
+      }
+
       setAccessTokenInMemory(null);
       throw new Error('Phiên đăng nhập Google đã hết hạn hoặc mã xác thực không hợp lệ. Vui lòng nhấn "Đăng nhập lại" để làm mới phiên.');
     }
