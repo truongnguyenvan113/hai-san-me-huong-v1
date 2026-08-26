@@ -141,6 +141,87 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
     reader.readAsDataURL(file);
   };
 
+  /**
+   * Keep the product name from the original note instead of using an
+   * AI-generated/synthesized product name. The AI response keeps the
+   * original line in item_note, so this is the source of truth for naming.
+   *
+   * Business rule: `1c`, `2c`, `3c`, ... mean 1kg, 2kg, 3kg, ... in our
+   * seafood price/order notes. They must never be interpreted as `con`.
+   */
+  const normalizeScannedItem = (item: any): ParsedItem => {
+    let productName = String(item?.product_name || 'Hải sản').trim();
+    let quantity = typeof item?.quantity === 'number' ? item.quantity : parseFloat(item?.quantity) || 1;
+    let unit = (item?.unit || 'kg') as UnitType;
+    let size = String(item?.size || '').trim();
+    let processingNote = String(item?.processing_note || '').trim();
+    const itemNote = String(item?.item_note || '').trim();
+
+    if (itemNote) {
+      let sourceName = itemNote;
+
+      // Remove status / total markers which are not part of the product name.
+      sourceName = sourceName
+        .replace(/\b(?:done|donr|dine|chưa giao|e lấy)\b/gi, '')
+        .replace(/=\s*[\d.,]+\s*k(?:vnd)?/gi, '')
+        .replace(/([\d.,]+)\s*k(?:vnd)?/gi, '')
+        .trim();
+
+      // Preserve size information separately. Do not confuse `14-16c`
+      // with the business-rule quantity notation `2c` at the beginning.
+      const sourceSizeMatch = sourceName.match(/(?:size|sz\s*)?(\d{1,2}[\-\/]\d{1,2})\s*c\b/i) ||
+        sourceName.match(/s(?:ize|z)\s*([\d-]+)/i);
+      if (sourceSizeMatch) {
+        size = size || `Size ${sourceSizeMatch[1]} con/kg`;
+        sourceName = sourceName
+          .replace(/(?:size|sz\s*)?\d{1,2}[\-\/]\d{1,2}\s*c\b/gi, '')
+          .replace(/s(?:ize|z)\s*[\d-]+/gi, '')
+          .trim();
+      }
+
+      // `1c`, `2c`, `3c` ... are kilograms in the store's notes.
+      const cQuantityMatch = sourceName.match(/^([\d.,]+)\s*c\b/i);
+      if (cQuantityMatch) {
+        quantity = parseFloat(cQuantityMatch[1].replace(',', '.')) || quantity;
+        unit = 'kg';
+        sourceName = sourceName.replace(/^([\d.,]+)\s*c\b/i, '').trim();
+      } else {
+        const quantityMatch = sourceName.match(/^([\d.,]+)\s*(kg|g|gram|khay|hộp|túi|con)\b/i);
+        if (quantityMatch) {
+          quantity = parseFloat(quantityMatch[1].replace(',', '.')) || quantity;
+          const sourceUnit = quantityMatch[2].toLowerCase();
+          if (sourceUnit === 'g' || sourceUnit === 'gram') unit = 'gram';
+          else unit = sourceUnit as UnitType;
+          sourceName = sourceName.replace(/^([\d.,]+)\s*(kg|g|gram|khay|hộp|túi|con)\b/i, '').trim();
+        }
+      }
+
+      // `đổi ...` is a processing instruction, not a new product name.
+      const changeMatch = sourceName.match(/^(.*?)\s+đổi\s+(.+)$/i);
+      if (changeMatch) {
+        productName = changeMatch[1].trim();
+        processingNote = processingNote || `Đổi ${changeMatch[2].trim()}`;
+      } else if (sourceName) {
+        productName = sourceName;
+      }
+    }
+
+    productName = productName
+      .replace(/\s+/g, ' ')
+      .replace(/^[-•]+\s*/, '')
+      .trim();
+
+    return {
+      product_name: productName || 'Hải sản',
+      quantity,
+      unit,
+      size,
+      estimated_price: item?.estimated_price || 200000,
+      processing_note: processingNote,
+      item_note: itemNote,
+    };
+  };
+
   const handleStartAnalysis = async (imgOverride?: string, textOverride?: string) => {
     const imgToUse = imgOverride || selectedImage;
     const textToUse = textOverride || rawText;
@@ -196,15 +277,7 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
         building: o.building || 'Tòa A',
         room: o.room || '---',
         phone: o.phone || '',
-        items: (o.items || []).map((it: any) => ({
-          product_name: it.product_name || 'Hải sản',
-          quantity: typeof it.quantity === 'number' ? it.quantity : parseFloat(it.quantity) || 1,
-          unit: it.unit || 'kg',
-          size: it.size || '',
-          estimated_price: it.estimated_price || 200000,
-          processing_note: it.processing_note || '',
-          item_note: it.item_note || '',
-        })),
+        items: (o.items || []).map((it: any) => normalizeScannedItem(it)),
       }));
 
       setParsedData({
