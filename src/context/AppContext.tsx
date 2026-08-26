@@ -4,6 +4,7 @@ import {
   Product,
   Order,
   Batch,
+  BatchStatus,
   PaymentTransaction,
   AuditLog,
   StoreSettings,
@@ -137,7 +138,8 @@ interface AppContextType {
   addCustomer: (c: Customer) => void;
   updateCustomer: (c: Customer) => void;
   addBatch: (b: Batch) => void;
-  updateBatch: (b: Batch) => void;
+  updateBatch: (b: Batch, cascadeToOrders?: boolean) => void;
+  advanceBatchStage: (batchId: string, newStatus: BatchStatus, cascadeToOrders?: boolean) => Promise<boolean>;
   setCurrentBatch: (batchId: string) => void;
   addOrder: (o: Order) => void;
   updateOrder: (o: Order) => void;
@@ -488,13 +490,80 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     storage.addBatch(batch);
     setBatches(storage.getBatches());
     setSelectedBatchId(batch.batch_id);
-    addToast('success', 'Đã tạo đợt hàng mới', `${batch.batch_name} - Tự động đồng bộ Google Sheets`);
+    addToast('success', 'Đã tạo đợt hàng mới', `${batch.batch_name} - Đang đồng bộ lên Google Sheets...`);
+    // Trigger immediate push to Google Sheets
+    executeAutoSync(true);
   };
 
-  const updateBatch = (batch: Batch) => {
+  const updateBatch = (batch: Batch, cascadeToOrders: boolean = true) => {
     storage.updateBatch(batch);
+
+    if (cascadeToOrders) {
+      // Map batch stage progression to orders in this batch
+      const currentOrders = storage.getOrders();
+      let hasOrderChanges = false;
+
+      const updatedOrders = currentOrders.map((o) => {
+        if (o.batch_id === batch.batch_id && o.status !== 'CANCELLED') {
+          let newOrderStatus: Order['status'] = o.status;
+          let newDeliveryStatus: Order['delivery_status'] = o.delivery_status;
+
+          if (batch.status === 'COLLECTING' || batch.status === 'OPEN') {
+            newOrderStatus = 'COLLECTING';
+          } else if (batch.status === 'CONFIRMED') {
+            newOrderStatus = 'CONFIRMED';
+          } else if (batch.status === 'ORDERED') {
+            newOrderStatus = 'ORDERED';
+          } else if (batch.status === 'RECEIVED') {
+            newOrderStatus = 'RECEIVED';
+          } else if (batch.status === 'DISTRIBUTING') {
+            newOrderStatus = o.is_packed ? 'PACKED' : 'RECEIVED';
+          } else if (batch.status === 'DELIVERING') {
+            newOrderStatus = 'DELIVERING';
+            newDeliveryStatus = 'DELIVERING';
+          } else if (batch.status === 'COMPLETED') {
+            newOrderStatus = 'DELIVERED';
+            newDeliveryStatus = 'DELIVERED';
+          }
+
+          if (newOrderStatus !== o.status || newDeliveryStatus !== o.delivery_status) {
+            hasOrderChanges = true;
+            return {
+              ...o,
+              status: newOrderStatus,
+              delivery_status: newDeliveryStatus,
+              updated_at: new Date().toISOString(),
+            };
+          }
+        }
+        return o;
+      });
+
+      if (hasOrderChanges) {
+        storage.saveOrders(updatedOrders);
+        setOrders(storage.getOrders());
+      }
+    }
+
     setBatches(storage.getBatches());
-    addToast('success', 'Đã cập nhật đợt hàng', batch.batch_name);
+    addToast('success', 'Đã cập nhật tiến trình đợt hàng', `${batch.batch_name} - Đang đẩy lên Google Sheets...`);
+    // Immediately push to Google Sheets
+    executeAutoSync(true);
+  };
+
+  const advanceBatchStage = async (batchId: string, newStatus: BatchStatus, cascadeToOrders: boolean = true): Promise<boolean> => {
+    const currentBatches = storage.getBatches();
+    const batch = currentBatches.find((b) => b.batch_id === batchId);
+    if (!batch) return false;
+
+    const updatedBatch: Batch = {
+      ...batch,
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    };
+
+    updateBatch(updatedBatch, cascadeToOrders);
+    return true;
   };
 
   const setCurrentBatch = (batchId: string) => {
@@ -703,6 +772,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateCustomer,
         addBatch,
         updateBatch,
+        advanceBatchStage,
         setCurrentBatch,
         addOrder,
         updateOrder,

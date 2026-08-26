@@ -294,9 +294,14 @@ export function prepareSheetData(
     'Ngày Tạo Đợt',
     'Ngày Giao Dự Kiến',
     'Trạng Thái Đợt',
+    'Tiến Trình Luồng Xử Lý',
+    'Tiến Độ Cân Chia & Đóng Gói',
+    'Tiến Độ Giao Tận Phòng',
     'Nguồn Cung Cấp / Quê',
     'Tổng Số Đơn Hàng',
     'Tổng Doanh Thu (VNĐ)',
+    'Đã Thu Tiền (VNĐ)',
+    'Còn Nợ (VNĐ)',
     'Tổng Khối Lượng (kg/khay)',
     'Ghi Chú Đợt',
   ];
@@ -304,6 +309,8 @@ export function prepareSheetData(
   const batchesRows = batches.map((b) => {
     const batchOrders = orders.filter((o) => o.batch_id === b.batch_id && o.status !== 'CANCELLED');
     const totalRev = batchOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+    const totalPaid = batchOrders.reduce((sum, o) => sum + (o.paid_amount || 0), 0);
+    const totalDebt = batchOrders.reduce((sum, o) => sum + (o.debt_amount || 0), 0);
     const totalWeight = batchOrders.reduce((sum, o) => {
       return (
         sum +
@@ -323,15 +330,48 @@ export function prepareSheetData(
       CANCELLED: 'Đã hủy',
     };
 
+    const workflowStepMap: Record<string, string> = {
+      OPEN: 'Bước 1/7: Mở nhận đơn gom',
+      COLLECTING: 'Bước 1/7: Đang gom đơn cư dân',
+      CONFIRMED: 'Bước 2/7: Đã chốt số lượng đợt',
+      ORDERED: 'Bước 3/7: Đã đặt hàng quê & đóng thùng',
+      RECEIVED: 'Bước 4/7: Hải sản đã về chung cư',
+      DISTRIBUTING: 'Bước 5/7: Đang cân chia & đóng túi',
+      DELIVERING: 'Bước 6/7: Đang đi giao tận phòng',
+      COMPLETED: 'Bước 7/7: Đã hoàn tất đợt gom',
+      CANCELLED: 'Đã hủy đợt gom',
+    };
+
+    const totalOrdersCount = batchOrders.length;
+    const weighedCount = batchOrders.filter(
+      (o) => o.is_weighed || (o.items || []).every((it) => it.quantity_actual !== undefined && it.quantity_actual > 0)
+    ).length;
+    const packedCount = batchOrders.filter((o) => o.is_packed).length;
+    const deliveredCount = batchOrders.filter((o) => o.delivery_status === 'DELIVERED').length;
+    const distributingCount = batchOrders.filter((o) => o.delivery_status === 'DELIVERING').length;
+
+    const weighAndPackProgress = totalOrdersCount > 0 
+      ? `Đã cân: ${weighedCount}/${totalOrdersCount} đơn | Đã đóng túi: ${packedCount}/${totalOrdersCount} đơn`
+      : 'Chưa có đơn';
+
+    const deliveryProgress = totalOrdersCount > 0
+      ? `Đã giao: ${deliveredCount}/${totalOrdersCount} đơn${distributingCount > 0 ? ` (Đang giao: ${distributingCount})` : ''}`
+      : 'Chưa có đơn';
+
     return [
       b.batch_code,
       b.batch_name,
       b.batch_date || b.created_at || '',
       b.delivery_date || '',
       statusMap[b.status] || b.status,
+      workflowStepMap[b.status] || b.status,
+      weighAndPackProgress,
+      deliveryProgress,
       b.supplier_info?.location || 'Quảng Ninh & Cà Mau',
-      batchOrders.length,
+      totalOrdersCount,
       totalRev,
+      totalPaid,
+      totalDebt,
       totalWeight,
       b.notes || '',
     ];
@@ -758,9 +798,9 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     const colName = findColIndex(bHeaders, ['tên đợt', 'tên đợt gom', 'đợt gom', 'tên'], 1);
     const colDate = findColIndex(bHeaders, ['ngày tạo', 'ngày mở', 'ngày tạo đợt'], 2);
     const colDelivery = findColIndex(bHeaders, ['ngày giao', 'ngày giao dự kiến', 'giao'], 3);
-    const colStatus = findColIndex(bHeaders, ['trạng thái', 'tình trạng'], 4);
-    const colOrigin = findColIndex(bHeaders, ['nguồn', 'quê', 'nhà cung cấp', 'vùng'], 5);
-    const colNotes = findColIndex(bHeaders, ['ghi chú', 'notes'], 9);
+    const colStatus = findColIndex(bHeaders, ['trạng thái', 'tình trạng', 'tiến trình'], 4);
+    const colOrigin = findColIndex(bHeaders, ['nguồn', 'quê', 'nhà cung cấp', 'vùng'], 8);
+    const colNotes = findColIndex(bHeaders, ['ghi chú', 'notes'], bHeaders.length - 1);
 
     for (let i = 1; i < batchesRows.length; i++) {
       const r = batchesRows[i];

@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   Clock,
+  Cloud,
   Copy,
   DollarSign,
   FileSpreadsheet,
@@ -18,6 +19,7 @@ import {
   PackageCheck,
   Plus,
   Printer,
+  RefreshCw,
   Scale,
   Send,
   Sparkles,
@@ -45,12 +47,16 @@ export const BatchDetailView: React.FC = () => {
     orders,
     products,
     updateBatch,
+    advanceBatchStage,
     updateOrder,
     updateBatchActualPrices,
     cancelOrder,
     getBatchItemSummary,
     setPrintModalConfig,
     setIsCreateOrderOpen,
+    triggerSyncNow,
+    syncStatus,
+    spreadsheetId,
     addToast,
   } = useApp();
 
@@ -67,6 +73,7 @@ export const BatchDetailView: React.FC = () => {
 
   // Status transition confirm
   const [nextStatusToSet, setNextStatusToSet] = useState<BatchStatus | null>(null);
+  const [isSyncingSheets, setIsSyncingSheets] = useState(false);
 
   const batch = batches.find((b) => b.batch_id === selectedBatchId) || batches[0];
   if (!batch) {
@@ -94,15 +101,30 @@ export const BatchDetailView: React.FC = () => {
   const totalDelivered = batchOrders.filter((o) => o.delivery_status === 'DELIVERED').length;
 
   const currentStageIndex = BATCH_STAGES.indexOf(batch.status);
+  const nextStage = currentStageIndex >= 0 && currentStageIndex < BATCH_STAGES.length - 1 
+    ? BATCH_STAGES[currentStageIndex + 1] 
+    : null;
 
-  // Handle stage change
-  const handleAdvanceStage = (newStatus: BatchStatus) => {
-    updateBatch({
-      ...batch,
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-    });
-    addToast('success', 'Chuyển trạng thái đợt hàng', `Đợt hàng chuyển sang: ${BATCH_STATUS_CONFIG[newStatus].label}`);
+  // Handle stage change with cascade and instant push to Google Sheets
+  const handleAdvanceStage = async (newStatus: BatchStatus) => {
+    await advanceBatchStage(batch.batch_id, newStatus, true);
+    addToast(
+      'success',
+      'Cập nhật tiến trình đợt gom',
+      `Đã chuyển sang: ${BATCH_STATUS_CONFIG[newStatus].label} — Toàn bộ đơn hàng và tiến trình đã được đẩy lên Google Sheets!`
+    );
+  };
+
+  const handleManualSyncSheets = async () => {
+    setIsSyncingSheets(true);
+    try {
+      const ok = await triggerSyncNow();
+      if (ok) {
+        addToast('success', 'Đã đồng bộ Google Sheets', `Đã đẩy toàn bộ dữ liệu đợt ${batch.batch_code} lên Google Sheets thành công!`);
+      }
+    } finally {
+      setIsSyncingSheets(false);
+    }
   };
 
   // Copy Zalo / Quê order message
@@ -204,6 +226,17 @@ export const BatchDetailView: React.FC = () => {
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
+            id="batch-sync-sheets-btn"
+            onClick={handleManualSyncSheets}
+            disabled={isSyncingSheets || syncStatus === 'SYNCING'}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
+            title="Đẩy ngay toàn bộ trạng thái tiến trình và đơn hàng lên Google Sheets"
+          >
+            <Cloud className={`w-4 h-4 ${isSyncingSheets || syncStatus === 'SYNCING' ? 'animate-pulse' : ''}`} />
+            {isSyncingSheets || syncStatus === 'SYNCING' ? 'Đang Đẩy Sheets...' : 'Đẩy Lên Sheets Ngay'}
+          </button>
+
+          <button
             id="open-create-order-in-batch-btn"
             onClick={() => setIsCreateOrderOpen(true)}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-800 hover:bg-teal-900 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
@@ -228,51 +261,81 @@ export const BatchDetailView: React.FC = () => {
       </div>
 
       {/* WORKFLOW STEPPER BAR */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs overflow-x-auto">
-        <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center justify-between">
-          <span>Tiến trình luồng xử lý đợt gom:</span>
-          <span className="text-slate-700 font-medium lowercase">
-            Gom đơn → Chốt đơn → Đặt quê → Nhận hàng → Cân chia → Giao phòng
-          </span>
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+              Tiến trình luồng xử lý đợt gom:
+            </span>
+            <span className="text-xs font-medium text-teal-800 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">
+              Bước {currentStageIndex + 1}/7: {BATCH_STATUS_CONFIG[batch.status].label}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {nextStage && (
+              <button
+                id="advance-next-stage-quick-btn"
+                onClick={() => setNextStatusToSet(nextStage)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-teal-800 to-emerald-800 hover:from-teal-900 hover:to-emerald-900 text-white text-xs font-bold rounded-xl shadow-xs transition-all active:scale-95"
+              >
+                <span>Chuyển sang: {BATCH_STATUS_CONFIG[nextStage].label}</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex items-center justify-between min-w-[700px] gap-2">
-          {BATCH_STAGES.map((stage, idx) => {
-            const isPassed = currentStageIndex > idx;
-            const isCurrent = currentStageIndex === idx;
 
-            return (
-              <div key={stage} className="flex-1 flex flex-col items-center relative group">
-                <button
-                  onClick={() => setNextStatusToSet(stage)}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs transition-all ${
-                    isCurrent
-                      ? 'bg-teal-800 text-white ring-4 ring-teal-100 scale-110 shadow-md'
-                      : isPassed
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-100 text-slate-400 border border-slate-300 hover:bg-slate-200'
-                  }`}
-                >
-                  {isPassed ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
-                </button>
-                <span
-                  className={`text-[11px] font-bold mt-2 text-center whitespace-nowrap ${
-                    isCurrent ? 'text-teal-900 font-black' : isPassed ? 'text-emerald-700' : 'text-slate-500'
-                  }`}
-                >
-                  {BATCH_STATUS_CONFIG[stage].label}
-                </span>
+        <div className="overflow-x-auto pb-1">
+          <div className="flex items-center justify-between min-w-[720px] gap-2">
+            {BATCH_STAGES.map((stage, idx) => {
+              const isPassed = currentStageIndex > idx;
+              const isCurrent = currentStageIndex === idx;
 
-                {/* Arrow connector */}
-                {idx < BATCH_STAGES.length - 1 && (
-                  <div
-                    className={`absolute top-4 left-1/2 w-full h-0.5 -z-0 ${
-                      isPassed ? 'bg-emerald-500' : 'bg-slate-200'
+              return (
+                <div key={stage} className="flex-1 flex flex-col items-center relative group">
+                  <button
+                    id={`batch-stage-btn-${stage.toLowerCase()}`}
+                    onClick={() => setNextStatusToSet(stage)}
+                    className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs transition-all cursor-pointer ${
+                      isCurrent
+                        ? 'bg-teal-800 text-white ring-4 ring-teal-100 scale-110 shadow-md'
+                        : isPassed
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-400 border border-slate-300 hover:bg-slate-200 hover:text-slate-700'
                     }`}
-                  />
-                )}
-              </div>
-            );
-          })}
+                    title={`Click để chuyển đợt hàng sang: ${BATCH_STATUS_CONFIG[stage].label}`}
+                  >
+                    {isPassed ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
+                  </button>
+                  <span
+                    className={`text-[11px] font-bold mt-2 text-center whitespace-nowrap ${
+                      isCurrent ? 'text-teal-900 font-black' : isPassed ? 'text-emerald-700' : 'text-slate-500'
+                    }`}
+                  >
+                    {BATCH_STATUS_CONFIG[stage].label}
+                  </span>
+
+                  {/* Arrow connector */}
+                  {idx < BATCH_STAGES.length - 1 && (
+                    <div
+                      className={`absolute top-4 left-1/2 w-full h-0.5 -z-0 ${
+                        isPassed ? 'bg-emerald-500' : 'bg-slate-200'
+                      }`}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+          <div className="flex items-center gap-1.5 text-teal-800 font-medium">
+            <Cloud className="w-3.5 h-3.5" />
+            <span>Tự động đồng bộ lên Google Sheets theo từng bước (Tab 1 Đơn Hàng, Tab 2 Đợt Gom, Tab 5 Cân Chia, Tab 6 Sổ Nợ)</span>
+          </div>
+          <span className="text-slate-400">Nhấp vào bất kỳ bước nào để chuyển trạng thái</span>
         </div>
       </div>
 
