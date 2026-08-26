@@ -47,44 +47,84 @@ function getGemini(): GoogleGenAI {
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY environment variable is not configured');
     }
-    aiClient = new GoogleGenAI({ apiKey });
+    aiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
   }
   return aiClient;
 }
 
-// Fallback rule-based parser for offline / direct text notes
+// Fallback rule-based parser for offline / direct text notes or screenshot transcriptions
 function ruleBasedTextParser(text: string) {
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  let batchName = 'Đợt Gom Hải Sản Mới';
+  let batchName = 'Đợt Hải Sản Mới';
   const orders: any[] = [];
 
   for (const line of lines) {
-    if (line.toLowerCase().includes('hsan') || line.toLowerCase().includes('hải sản') || line.toLowerCase().includes('đợt')) {
-      batchName = line.replace(/[:\-]/g, '').trim();
+    const cleanLine = line.replace(/^[\-\*\•\d\.\)]\s*/, '').trim();
+
+    if (
+      cleanLine.toLowerCase().includes('hải sản') ||
+      cleanLine.toLowerCase().includes('hsan') ||
+      cleanLine.toLowerCase().startsWith('đợt')
+    ) {
+      batchName = cleanLine.replace(/[:\-]/g, '').trim();
       if (!batchName.toLowerCase().startsWith('hải sản') && !batchName.toLowerCase().startsWith('đợt')) {
-        batchName = 'Đợt ' + batchName;
+        batchName = 'Đợt Hải Sản ' + batchName;
       }
       continue;
     }
 
-    // Match lines like "1903A: 0.5kg cá bơn + 1 rế" or "C Phô Mai: 1kg tuộc sữa + 1kg chả cá"
-    const colonIdx = line.indexOf(':');
+    // Match lines like "2303A: 2kg mực nhỏ 280K chưa giao" or "12A06B: 1kg mực nhỏ 145K + 0.5kg nõn bề bề 185K, = 330Kdonr"
+    const colonIdx = cleanLine.indexOf(':');
     if (colonIdx === -1) continue;
 
-    const left = line.substring(0, colonIdx).trim();
-    const right = line.substring(colonIdx + 1).trim();
+    const left = cleanLine.substring(0, colonIdx).trim();
+    let right = cleanLine.substring(colonIdx + 1).trim();
+
+    // Extract note tags at the end like "done", "donr", "dine", "chưa giao", "e lấy", "= 880K", "= 330Kdonr"
+    let statusNote = '';
+    if (/\b(?:done|donr|dine)\b/i.test(right)) {
+      statusNote = 'Đã xong';
+      right = right.replace(/\b(?:done|donr|dine)\b/gi, '').trim();
+    }
+    if (/\bchưa giao\b/i.test(right)) {
+      statusNote = 'Chưa giao';
+      right = right.replace(/\bchưa giao\b/gi, '').trim();
+    }
+    if (/\be lấy\b/i.test(right)) {
+      statusNote = 'Khách tự lấy';
+      right = right.replace(/\be lấy\b/gi, '').trim();
+    }
+
+    // Remove "= 880K" or "= 330K" total sum markers
+    right = right.replace(/=\s*[\d.,]+\s*k(?:vnd)?/gi, '').trim();
+    right = right.replace(/,\s*=\s*$/, '').trim();
 
     let building = 'Tòa A';
     let room = '';
     let customerName = left;
 
-    // Check room pattern like 1903A, 1006B, 904B, 0806B, p1707B, P.1707B, 1707 B
-    const roomMatch = left.match(/^p?\.?\s*(\d{3,4})\s*([A-Za-z]?)$/i);
+    // Check room pattern like 2303A, 12A06B, 1610B, 0707A, 1803B, p1707B
+    const roomMatch = left.match(/^p?\.?\s*([0-9]{1,4}[A-Za-z]?[0-9]{0,2})([A-Za-z])?$/i);
     if (roomMatch) {
-      const numPart = roomMatch[1];
-      const tower = roomMatch[2] ? roomMatch[2].toUpperCase() : '';
-      room = `${numPart}${tower}`;
-      building = tower ? `Tòa ${tower}` : 'Tòa A';
+      const fullRoom = left.replace(/^p?\.?\s*/i, '').toUpperCase();
+      room = fullRoom;
+      const lastChar = fullRoom.slice(-1);
+      if (lastChar === 'B') {
+        building = 'Tòa B';
+      } else if (lastChar === 'A') {
+        building = 'Tòa A';
+      } else if (lastChar === 'C') {
+        building = 'Tòa C';
+      } else {
+        building = 'Tòa A';
+      }
       customerName = `Căn ${room}`;
     } else {
       room = left.replace(/^(P|Phòng|Căn)\.?\s*/i, '').trim() || 'P.---';
@@ -100,9 +140,27 @@ function ruleBasedTextParser(text: string) {
       let name = rawItem;
       let size = '';
       let procNote = '';
+      let estimatedPrice = 150000;
 
-      // Match patterns like "0.5kg", "0,5kg", "1 kg", "1kg", "5 rế", "1 khay", "1 xù"
-      const qtyMatch = rawItem.match(/^([\d.,]+)\s*(kg|k|g|gram|khay|hộp|túi|con|rế|xù|mẹt)?\s*(.*)$/i);
+      // Extract price like "280K", "145K", "55K", "120K", "390K"
+      const priceMatch = name.match(/([\d.,]+)\s*k(?:vnd)?/i);
+      if (priceMatch) {
+        const pNum = parseFloat(priceMatch[1].replace(',', '.'));
+        if (pNum) {
+          estimatedPrice = pNum * 1000;
+        }
+        name = name.replace(/([\d.,]+)\s*k(?:vnd)?/gi, '').trim();
+      }
+
+      // Check size like "14-16c", "15/17c", "10-12c", "11-12c", "sz 20-22"
+      const szMatch = name.match(/(?:size|sz\s*)?(\d{1,2}[\-\/]\d{1,2})\s*c\b/i) || name.match(/s(?:ize|z)\s*([\d-]+)/i);
+      if (szMatch) {
+        size = `Size ${szMatch[1]} con/kg`;
+        name = name.replace(/(?:size|sz\s*)?\d{1,2}[\-\/]\d{1,2}\s*c\b/gi, '').replace(/s(?:ize|z)\s*[\d-]+/gi, '').trim();
+      }
+
+      // Match patterns like "0.5kg", "0,5kg", "1 kg", "2c", "3c", "1 xù", "1 rế", "2 rế", "0.5"
+      const qtyMatch = name.match(/^([\d.,]+)\s*(kg|k|g|gram|khay|hộp|túi|con|c|rế|xù|mẹt)?\s*(.*)$/i);
       if (qtyMatch) {
         qty = parseFloat(qtyMatch[1].replace(',', '.')) || 1;
         const matchedUnit = (qtyMatch[2] || '').toLowerCase();
@@ -110,10 +168,13 @@ function ruleBasedTextParser(text: string) {
 
         if (matchedUnit === 'rế') {
           unit = 'khay';
-          name = 'Rế hải sản (mẹt/khay)';
+          name = 'Rế hải sản';
         } else if (matchedUnit === 'xù') {
           unit = 'hộp';
           name = 'Tôm/chả chiên xù';
+        } else if (matchedUnit === 'c' || matchedUnit === 'con') {
+          unit = 'con';
+          name = rest;
         } else if (matchedUnit === 'khay') {
           unit = 'khay';
           name = rest;
@@ -125,45 +186,61 @@ function ruleBasedTextParser(text: string) {
           name = rest;
         } else {
           unit = 'kg';
-          name = rest || rawItem;
+          name = rest || name;
         }
       }
 
-      if (rawItem.toLowerCase() === '1 rế' || rawItem.toLowerCase() === 'rế') {
+      // Specialized shorthands
+      const lowerName = name.toLowerCase().trim();
+      if (lowerName === 'xù' || lowerName === '1 xù') {
+        name = 'Tôm/chả chiên xù';
+        unit = 'hộp';
+      } else if (lowerName === 'rế' || lowerName === '1 rế' || lowerName === '2 rế') {
         name = 'Rế hải sản';
         unit = 'khay';
-        qty = 1;
-      }
-      if (rawItem.toLowerCase() === '1 xù' || rawItem.toLowerCase() === 'xù') {
-        name = 'Tôm/Chả chiên xù';
-        unit = 'hộp';
-        qty = 1;
+      } else if (lowerName.includes('mực nhỏ') || lowerName.includes('mứch nh') || lowerName.includes('mực nh')) {
+        name = 'Mực nhỏ tươi';
+        unit = 'kg';
+      } else if (lowerName.includes('tôm he') || lowerName.startsWith('he ')) {
+        name = 'Tôm he biển tươi';
+        unit = 'kg';
+      } else if (lowerName.includes('mực trứng')) {
+        name = 'Mực trứng tươi';
+        unit = 'kg';
+      } else if (lowerName.includes('mực ống')) {
+        name = 'Mực ống tươi';
+        unit = 'kg';
+      } else if (lowerName.includes('chả cá pha mực')) {
+        name = 'Chả cá pha mực';
+        unit = 'kg';
+      } else if (lowerName.includes('nõn bề bề')) {
+        name = 'Nõn bề bề bóc sẵn';
+        unit = 'kg';
+      } else if (lowerName.includes('ruột dắt') || lowerName.includes('dắt')) {
+        name = 'Ruột dắt biển tươi';
+        unit = 'kg';
+      } else if (lowerName.includes('cá thu 1 nắng') || lowerName.includes('thu 1 nắng')) {
+        name = 'Cá thu một nắng';
+        unit = 'kg';
+      } else if (lowerName.includes('cá mối')) {
+        name = 'Cá mối tươi';
+        unit = 'kg';
+      } else if (lowerName.includes('cá nục')) {
+        name = 'Cá nục tươi';
+        unit = 'kg';
+      } else if (lowerName.includes('ghẹ sữa')) {
+        name = 'Ghẹ sữa';
+        unit = unit === 'con' ? 'con' : 'kg';
+      } else if (lowerName.includes('ghẹ lưới')) {
+        name = 'Ghẹ lưới tươi';
+        unit = unit === 'con' ? 'con' : 'kg';
+      } else if (lowerName.includes('ốc biển') || lowerName === 'ốc') {
+        name = 'Ốc biển tươi';
+        unit = 'kg';
       }
 
-      // Check size
-      const szMatch = name.match(/s(?:ize|z)\s*([\d-]+)/i);
-      if (szMatch) {
-        size = `Size ${szMatch[1]}`;
-      }
-
-      // Clean processing notes
-      if (name.toLowerCase().includes('nấu canh')) {
-        procNote = 'Nấu canh';
-      } else if (name.toLowerCase().includes('đổi mực nhỏ')) {
-        procNote = 'Đổi mực nhỏ';
-      }
-
-      // Clean product name
-      name = name
-        .replace(/s(?:ize|z)\s*[\d-]+/gi, '')
-        .replace(/nhé\s*ạ/gi, '')
-        .replace(/loại\s*1/gi, 'Loại 1')
-        .replace(/vẫn\s*size/gi, '')
-        .trim();
-
+      name = name.trim();
       if (!name) name = 'Hải sản tươi';
-
-      // Capitalize first letter
       name = name.charAt(0).toUpperCase() + name.slice(1);
 
       items.push({
@@ -171,7 +248,7 @@ function ruleBasedTextParser(text: string) {
         quantity: qty,
         unit: unit,
         size: size || undefined,
-        estimated_price: unit === 'khay' || unit === 'hộp' ? 120000 : 220000,
+        estimated_price: estimatedPrice,
         processing_note: procNote || undefined,
         item_note: rawItem,
       });
@@ -183,6 +260,7 @@ function ruleBasedTextParser(text: string) {
         building: building,
         room: room,
         phone: '',
+        order_note: statusNote || undefined,
         items: items,
       });
     }
@@ -190,7 +268,7 @@ function ruleBasedTextParser(text: string) {
 
   return {
     batch_name: batchName,
-    note: 'Được trích xuất tự động từ văn bản ghi chú',
+    note: 'Được trích xuất tự động từ danh sách ghi chú',
     orders: orders,
   };
 }
@@ -206,19 +284,17 @@ async function callGeminiWithFallback(
     };
   }
 ) {
-  // Ordered by reliability and high-throughput multimodal capability
+  // Ordered by reliability, throughput and multimodal capability (Valid SDK models)
   const candidateModels = [
-    'gemini-3.6-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
     'gemini-3.7-flash',
+    'gemini-flash-latest',
+    'gemini-3.1-flash-lite',
     'gemini-3.1-pro-preview',
   ];
 
   let lastError: any = null;
 
   for (const model of candidateModels) {
-    // Retry up to 2 times for each model if 503 or 429 occurs
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         console.log(`[AI Extractor] Trying model: ${model} (attempt ${attempt + 1})...`);
@@ -246,11 +322,9 @@ async function callGeminiWithFallback(
           errMsg.includes('fetch failed');
 
         if (!isTemporary) {
-          // If it's a non-temporary error (e.g. bad request or invalid schema), try next model directly
           break;
         }
 
-        // Wait brief delay before retrying this model or moving to next
         await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 800));
       }
     }
@@ -295,68 +369,62 @@ async function startServer() {
       const ai = getGemini();
 
       const systemPrompt = `Bạn là chuyên gia kế toán & quản lý gom đơn hải sản quê phục vụ cư dân chung cư tại Việt Nam (${condoName || 'Chung cư Geleximco 897 Giải Phóng'}).
-Nhiệm vụ của bạn là đọc và phân tích ảnh ghi chú (như ảnh chụp ứng dụng Notes, tin nhắn Zalo, sổ tay viết tay gom đơn hải sản) hoặc văn bản ghi chú thô, sau đó trích xuất thành danh sách đợt gom hàng và đơn hàng chi tiết từng căn hộ.
+Nhiệm vụ của bạn là đọc và phân tích ảnh chụp màn hình ghi chú (như ứng dụng Apple Notes trên iPhone, tin nhắn Zalo, sổ tay viết tay gom đơn hải sản) hoặc văn bản ghi chú thô, sau đó trích xuất thành danh sách đợt gom hàng và đơn hàng chi tiết từng căn hộ.
+
+ĐẶC BIỆT CHÚ Ý ĐỊNH DẠNG GHI CHÚ NOTES IPHONE:
+Ghi chú thường có tiêu đề ngày tháng (ví dụ: "Hải sản 16/08", "Đợt cá mực 25/8") và các dòng gạch đầu dòng theo mẫu:
+- [Số phòng]: [Số lượng][Tên món] [Size nếu có] [Giá tiền] [Ghi chú nếu có]
+Ví dụ thực tế:
+- "- 2303A: 2kg mực nhỏ 280K chưa giao" -> Căn: 2303A, Tòa: Tòa A, Món: "Mực nhỏ tươi", Số lượng: 2, Đơn vị: "kg", Giá ước tính: 140000đ/kg (hoặc tổng 280000đ), Ghi chú món: "Chưa giao"
+- "- 1403A: 1kg tôm he 14-16c 390K + 1kg cá mối 160K + 1kg mực trứng 15/17c 330K, = 880K" -> Căn 1403A có 3 món (Tôm he size 14-16 con/kg giá 390000đ, Cá mối 160000đ, Mực trứng size 15-17 con/kg giá 330000đ)
+- "- 1106A: 1 xù 1 rế 210K + 1kg chả cá pha mực 250K, = 460K" -> 1 khay tôm/chả xù, 1 khay rế hải sản (tổng 210000đ) + 1kg chả cá pha mực (250000đ)
+- "- 1610B: 2c ghẹ sữa 55K + 3c ghẹ lưới 120K+ 1kg ốc biển 200K + 0.5kg tôm he 11-12c 230K, = 605K" -> Căn 1610B (Tòa B): 2 con ghẹ sữa (55000đ), 3 con ghẹ lưới (120000đ), 1kg ốc biển (200000đ), 0.5kg tôm he size 11-12 con/kg (230000đ)
+- "- 1808B: 1kg mứch nh 145K" -> Căn 1808B: 1kg mực nhỏ tươi 145000đ
+- "- 12A06B: 1kg mực nhỏ 145K + 0.5kg nõn bề bề 185K, = 330Kdonr" -> Căn 12A06B (Tòa B): 1kg mực nhỏ (145000đ), 0.5kg nõn bề bề (185000đ), Ghi chú: "Đã hoàn thành"
+- "- 1803B: 0.5kg mực ống 10-12c 145K dine" -> Căn 1803B: 0.5kg mực ống size 10-12 con/kg (145000đ), Ghi chú: "Đã hoàn thành"
+- "- 1110A: 0.5kg ruột dắt 130K done" -> Căn 1110A: 0.5kg ruột dắt biển (130000đ)
+- "- 1203A: 1 xù 110K done" -> Căn 1203A: 1 hộp tôm/chả chiên xù (110000đ)
+- "- 1401A: 2 rế 210K + 1kg cá thu 1 nắng 310K + 1kg he 10-12c 460K= 980K, e lấy" -> Căn 1401A: 2 khay rế (210000đ), 1kg cá thu 1 nắng (310000đ), 1kg tôm he size 10-12c (460000đ), Ghi chú: "Khách tự lấy"
 
 QUY TẮC PHÂN TÍCH TÊN CĂN HỘ & TÒA NHÀ:
-- Nếu thấy số phòng kèm ký tự chữ cái (ví dụ: "1903A", "1203A", "1606A", "1501A", "2303A", "1707B", "p1707B", "1006B", "904B", "0806B", "2206B"):
-  + room: GIỮ NGUYÊN ĐẦY ĐỦ CẢ SỐ PHÒNG VÀ CHỮ CÁI HẬU TỐ (ví dụ: "1903A", "1707B", "1006B", "904B", "1203A"). Tuyệt đối không cắt bỏ chữ cái A, B, C, D ở cuối phòng.
-  + building: "Tòa A" (nếu đuôi A) hoặc "Tòa B" (nếu đuôi B)
-  + customer_name: "Căn 1903A" hoặc "Căn 1707B"
-- Nếu là tên khách quen (ví dụ: "C Phô Mai", "Chị Lan 1205", "Anh Tuấn"):
-  + customer_name: "Chị Phô Mai"
-  + room: "1205" hoặc "Khách quen" nếu không có số phòng
+- Nếu thấy số phòng kèm ký tự chữ cái (ví dụ: "2303A", "1211A", "1403A", "1106A", "1610B", "1002B", "1808B", "1805A", "2206B", "12A06B", "1803B", "0707A", "1110A", "1203A", "1401A"):
+  + room: GIỮ NGUYÊN ĐẦY ĐỦ CẢ SỐ VÀ CHỮ CÁI (ví dụ: "2303A", "12A06B", "1610B").
+  + building: Nếu đuôi "A" -> "Tòa A", nếu đuôi "B" -> "Tòa B", nếu đuôi "C" -> "Tòa C".
+  + customer_name: "Căn " + room (ví dụ: "Căn 2303A", "Căn 12A06B").
+- Nếu là tên người (ví dụ: "Chị Hằng", "C Phô Mai"):
+  + customer_name: Tên khách hàng
+  + room: Số phòng nếu có hoặc "Khách quen"
   + building: "Tòa A" (mặc định)
 
-QUY TẮC ĐẶC TRƯNG HẢI SẢN & TỪ LÓNG CHỢ HẢI SẢN VIỆT NAM:
-- "rế" hoặc "1 rế", "5 rế": Rế hải sản / Mẹt ram rế / Rế mực / Rế tôm (Đơn vị: 'khay' hoặc 'hộp', giá ước tính ~100.000đ - 140.000đ/khay).
-- "xù" hoặc "1 xù": Tôm/Chả bao xù / Tôm chiên xù (Đơn vị: 'hộp' hoặc 'khay', giá ước tính ~120.000đ/hộp).
-- "cá bơn": Cá bơn tươi (kg)
-- "mực trứng đổi mực nhỏ": Tên: "Mực trứng", processing_note: "Đổi mực nhỏ"
-- "cá bạc má": Cá bạc má tươi (kg)
-- "chả mực loại 1": Chả mực Hạ Long Loại 1 (kg)
-- "chả cá thu cá nhồng": Chả cá thu cá nhồng (kg)
-- "nõn sắt nhỏ nấu canh" / "nõn sắt": Nõn tôm sắt tươi bóc sẵn (kg), processing_note: "Nấu canh"
-- "mực sz 20-22": Mực ống tươi, size: "Size 20-22 con/kg"
-- "tôm he sz 30-32": Tôm he biển tươi, size: "Size 30-32 con/kg"
-- "tôm he vẫn size 14-16": Tôm he biển tươi, size: "Size 14-16 con/kg"
-- "cá thu 1 nắng": Cá thu một nắng (kg)
-- "khay nõn bộp": Nõn tôm bộp tươi (Đơn vị: 'khay', số lượng 1)
-- "tuộc sữa": Bạch tuộc sữa tươi (kg)
-- "chả cá": Chả cá biển (kg)
-- "cá mối": Cá mối tươi (kg)
-- "cá hố": Cá hố tươi (kg)
+QUY TẮC GIÁ & ĐƠN VỊ:
+- "K" = nghìn đồng (ví dụ: 280K = 280.000đ, 145K = 145.000đ, 55K = 55.000đ).
+- "c" = con (ví dụ: "2c ghẹ sữa" = 2 con, "14-16c" = Size 14-16 con/kg).
+- "xù" = Tôm/chả chiên xù (Đơn vị: 'hộp').
+- "rế" = Rế hải sản (Đơn vị: 'khay').
+- "done", "donr", "dine" = Đã xử lý xong.
+- "chưa giao" = Chưa giao hàng.
 
-Ước tính giá hợp lý theo thị trường hải sản Việt Nam nếu không có giá trong ghi chú (hoặc khớp với danh mục sản phẩm hiện có nếu khớp tên).
-Đơn vị (unit) chuẩn: 'kg' | 'gram' | 'con' | 'hộp' | 'túi' | 'khay' | 'combo'.
-
-Hãy trả về JSON theo đúng định dạng sau:
+Hãy trả về định dạng JSON thuần túy (không bọc trong văn bản phụ):
 {
-  "batch_name": "Tên đợt gom hàng (ví dụ: Đợt Hải Sản Trước Lễ 25/08)",
-  "note": "Ghi chú chung của đợt nếu có",
+  "batch_name": "Đợt Hải Sản 16/08",
+  "note": "Ghi chú nếu có",
+  "raw_extracted_text": "Toàn bộ văn bản bóc tách nguyên văn từ ảnh để người dùng có thể xem lại...",
   "orders": [
     {
-      "customer_name": "Căn 1903A",
+      "customer_name": "Căn 2303A",
       "building": "Tòa A",
-      "room": "1903",
+      "room": "2303A",
       "phone": "",
+      "order_note": "Chưa giao",
       "items": [
         {
-          "product_name": "Cá bơn tươi",
-          "quantity": 0.5,
+          "product_name": "Mực nhỏ tươi",
+          "quantity": 2,
           "unit": "kg",
           "size": "",
-          "estimated_price": 280000,
+          "estimated_price": 140000,
           "processing_note": "",
-          "item_note": "0.5kg cá bơn"
-        },
-        {
-          "product_name": "Rế hải sản",
-          "quantity": 1,
-          "unit": "khay",
-          "size": "",
-          "estimated_price": 120000,
-          "processing_note": "",
-          "item_note": "1 rế"
+          "item_note": "2kg mực nhỏ 280K chưa giao"
         }
       ]
     }
@@ -366,12 +434,17 @@ Hãy trả về JSON theo đúng định dạng sau:
       const contents: any[] = [];
 
       if (imageBase64) {
-        // Strip data:image/...;base64, if present
-        const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z]+;base64,/, '');
-        const mimeType = imageMimeType || 'image/jpeg';
+        // Strip data:image/...;base64, properly regardless of format
+        const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/i, '').trim();
+        let mime = (imageMimeType || 'image/jpeg').toLowerCase();
+        if (mime.includes('png')) mime = 'image/png';
+        else if (mime.includes('webp')) mime = 'image/webp';
+        else if (mime.includes('heic') || mime.includes('heif')) mime = 'image/heic';
+        else mime = 'image/jpeg';
+
         contents.push({
           inlineData: {
-            mimeType: mimeType,
+            mimeType: mime,
             data: cleanBase64,
           },
         });
@@ -379,11 +452,11 @@ Hãy trả về JSON theo đúng định dạng sau:
 
       let userTextPrompt = rawText
         ? `Nội dung ghi chú cần phân tích:\n${rawText}`
-        : 'Hãy phân tích hình ảnh ghi chú danh sách gom đơn hải sản này và trích xuất thông tin đợt hàng, danh sách từng phòng cư dân và chi tiết các món hải sản.';
+        : 'Hãy đọc toàn bộ hình ảnh ghi chú danh sách đơn hàng gom hải sản này, bóc tách từng dòng căn hộ, nhận diện tên sản phẩm, số lượng, size, giá tiền K và quy cách.';
 
       if (existingProducts && Array.isArray(existingProducts) && existingProducts.length > 0) {
-        userTextPrompt += `\n\nDanh mục sản phẩm hiện có của cửa hàng (ưu tiên khớp tên và giá):\n` +
-          existingProducts.map((p: any) => `- ${p.product_name} (${p.unit}): ~${p.default_price?.toLocaleString('vi-VN')}đ`).join('\n');
+        userTextPrompt += `\n\nDanh mục sản phẩm tham khảo:\n` +
+          existingProducts.slice(0, 30).map((p: any) => `- ${p.product_name} (${p.unit}): ~${p.default_price?.toLocaleString('vi-VN')}đ`).join('\n');
       }
 
       contents.push(userTextPrompt);
@@ -396,15 +469,38 @@ Hãy trả về JSON theo đúng định dạng sau:
         },
       });
 
-      let parsedData;
+      let parsedData: any = null;
       try {
+        // Direct parse
         parsedData = JSON.parse(responseText);
       } catch (err) {
-        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          parsedData = JSON.parse(jsonMatch[0]);
+        // Strip markdown codeblocks like ```json ... ```
+        const cleanJsonStr = responseText
+          .replace(/```json\s*/gi, '')
+          .replace(/```\s*$/gi, '')
+          .trim();
+
+        try {
+          parsedData = JSON.parse(cleanJsonStr);
+        } catch (err2) {
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            try {
+              parsedData = JSON.parse(jsonMatch[0]);
+            } catch (err3) {
+              console.warn('[AI Extractor] Failed regex JSON parse:', err3);
+            }
+          }
+        }
+      }
+
+      if (!parsedData || !Array.isArray(parsedData.orders)) {
+        if (parsedData && parsedData.raw_extracted_text) {
+          parsedData = ruleBasedTextParser(parsedData.raw_extracted_text);
+        } else if (rawText) {
+          parsedData = ruleBasedTextParser(rawText);
         } else {
-          throw new Error('Không thể phân tích định dạng JSON từ phản hồi AI: ' + responseText.slice(0, 100));
+          throw new Error('AI đã phân tích nhưng không trích xuất được định dạng đơn hàng. Vui lòng bấm thử lại hoặc dán văn bản.');
         }
       }
 
@@ -424,7 +520,7 @@ Hãy trả về JSON theo đúng định dạng sau:
           success: true,
           source: 'rule_based_fallback',
           data: fallback,
-          warning: 'Mô hình AI đang có lượng truy cập cao. Hệ thống đã tự động chuyển sang bộ bóc tách thông minh cục bộ.',
+          warning: 'Mô hình AI đang bận. Hệ thống đã tự động chuyển sang bộ bóc tách thông minh cục bộ.',
         });
       }
 
@@ -432,7 +528,7 @@ Hãy trả về JSON theo đúng định dạng sau:
       const is503 = errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('UNAVAILABLE');
 
       const userFriendlyMsg = is503
-        ? 'Hệ thống AI Gemini hiện đang có lượng truy cập tăng đột biến (503 High Demand). Vui lòng bấm nút "🔄 Thử lại" bên dưới hoặc chuyển sang tab "Nhập Ghi Chú Văn Bản" để tạo ngay.'
+        ? 'Hệ thống AI Gemini hiện đang có lượng truy cập tăng đột biến. Vui lòng bấm nút "🔄 Thử lại" bên dưới hoặc chuyển sang tab "Nhập Ghi Chú Văn Bản".'
         : errMsg;
 
       return res.status(is503 ? 503 : 500).json({
