@@ -97,6 +97,9 @@ interface AppContextType {
   setIsCreateCustomerOpen: (open: boolean) => void;
   isAIScanOpen: boolean;
   setIsAIScanOpen: (open: boolean) => void;
+  aiScanInitialTab: 'IMAGE' | 'TEXT' | 'PRICE_SCAN';
+  setAiScanInitialTab: (tab: 'IMAGE' | 'TEXT' | 'PRICE_SCAN') => void;
+  openAIScanModal: (tab?: 'IMAGE' | 'TEXT' | 'PRICE_SCAN') => void;
   isSheetsSyncOpen: boolean;
   setIsSheetsSyncOpen: (open: boolean) => void;
   isCompareModalOpen: boolean;
@@ -225,6 +228,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isCreateProductOpen, setIsCreateProductOpen] = useState(false);
   const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false);
   const [isAIScanOpen, setIsAIScanOpen] = useState(false);
+  const [aiScanInitialTab, setAiScanInitialTab] = useState<'IMAGE' | 'TEXT' | 'PRICE_SCAN'>('IMAGE');
+
+  const openAIScanModal = (tab: 'IMAGE' | 'TEXT' | 'PRICE_SCAN' = 'IMAGE') => {
+    setAiScanInitialTab(tab);
+    setIsAIScanOpen(true);
+  };
   const [isSheetsSyncOpen, setIsSheetsSyncOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
   const [selectedCompareSnapshot, setSelectedCompareSnapshot] = useState<BackupSnapshot | null>(null);
@@ -838,6 +847,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setIsCreateCustomerOpen,
         isAIScanOpen,
         setIsAIScanOpen,
+        aiScanInitialTab,
+        setAiScanInitialTab,
+        openAIScanModal,
         isSheetsSyncOpen,
         setIsSheetsSyncOpen,
         isCompareModalOpen,

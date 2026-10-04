@@ -4,6 +4,7 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { ruleBasedPriceListParser } from './src/utils/priceListParser';
 
 dotenv.config();
 
@@ -528,6 +529,240 @@ Hãy trả về định dạng JSON thuần túy (không bọc trong văn bản 
 
       return res.status(is503 ? 503 : 500).json({
         error: userFriendlyMsg,
+        isTemporary: is503,
+      });
+    }
+  });
+
+  // API Route: Smart Seafood Price List AI Scanner & Auto-updater
+  app.post('/api/ai/parse-pricelist', async (req, res) => {
+    try {
+      const { imageBase64, imageMimeType, rawText, existingProducts, knownCategories } = req.body;
+
+      if (!imageBase64 && !rawText) {
+        return res.status(400).json({ error: 'Vui lòng cung cấp hình ảnh bảng giá hoặc nội dung văn bản' });
+      }
+
+      // If no Gemini API key or text only fallback
+      if (!process.env.GEMINI_API_KEY) {
+        if (rawText) {
+          const parsed = ruleBasedPriceListParser(rawText, existingProducts || [], knownCategories || []);
+          return res.json({
+            success: true,
+            source: 'rule_based',
+            data: { items: parsed },
+            warning: 'GEMINI_API_KEY chưa được cấu hình. Đang sử dụng bộ phân tích bảng giá thông minh cục bộ.',
+          });
+        } else {
+          return res.status(400).json({
+            error: 'Chưa cấu hình GEMINI_API_KEY trên hệ thống để quét phân tích hình ảnh AI. Vui lòng dán văn bản bảng giá.',
+          });
+        }
+      }
+
+      const ai = getGemini();
+
+      const systemPrompt = `Bạn là chuyên gia kế toán & quản lý bảng giá hải sản Việt Nam.
+Nhiệm vụ của bạn là đọc và phân tích ảnh chụp bảng giá hải sản (ảnh chụp bảng viết phấn, bảng giá in ấn, giấy ghi tay, thực đơn, bài đăng báo giá Zalo/Facebook) hoặc văn bản bảng giá thô, sau đó trích xuất thành danh sách sản phẩm hải sản với đơn giá và đơn vị tính chuẩn xác.
+
+ĐẶC BIỆT XỬ LÝ CÁC DẠNG GIÁ VÀ ĐƠN VỊ TÍNH ĐẶC THÙ (QUY TẮC BẮT BUỘC):
+1. Dạng đơn giá theo đơn vị:
+   - "155k/lít" hoặc "155k/lit" -> unit: "lít", unit_price: 155000, package_qty: 1, raw_price_str: "155k/lít"
+   - "280k/kg" hoặc "280/kg" -> unit: "kg", unit_price: 280000, package_qty: 1
+   - "90k/khay" -> unit: "khay", unit_price: 90000, package_qty: 1
+   - "120k/con" -> unit: "con", unit_price: 120000, package_qty: 1
+   - "50k/bịch" hoặc "50k/túi" -> unit: "túi" hoặc "bịch", unit_price: 50000
+   - "45k/chai" -> unit: "chai", unit_price: 45000
+   - "350k/thùng" -> unit: "thùng", unit_price: 350000
+
+2. Dạng giá cho nhiều đơn vị đóng gói (CỰC KỲ QUAN TRỌNG):
+   - "210/2hộp" hoặc "210k/2 hộp" -> Tổng giá là 210.000đ cho 2 hộp.
+     => unit: "hộp"
+     => package_qty: 2
+     => unit_price: 105000 (tính đơn giá cho 1 hộp = 210000 / 2 = 105000đ)
+     => total_price: 210000
+     => note: "210k / 2 hộp (105k/hộp)"
+   - "400k/2kg" -> unit: "kg", package_qty: 2, unit_price: 200000, total_price: 400000
+   - "150k/3 khay" -> unit: "khay", package_qty: 3, unit_price: 50000, total_price: 150000
+
+3. Danh mục hải sản gợi ý (category):
+   - "Tôm", "Cua", "Ghẹ", "Mực", "Cá biển", "Ốc & Ngao", "Chế biến", "Khác".
+   - Tôm he, tôm sú, tôm xù -> "Tôm"
+   - Cua gạch, cua thịt, cua cốm -> "Cua"
+   - Ghẹ xanh, ghẹ lưới -> "Ghẹ"
+   - Mực trứng, mực ống, mực sim, tuộc -> "Mực"
+   - Cá thu, cá bơn, cá mối, cá bạc má, cá chim -> "Cá biển"
+   - Ốc hương, ngao, sò huyết, ruột dắt, hàu sữa -> "Ốc & Ngao"
+   - Chả mực, chả cá, rế hải sản, nem hải sản, chả ram -> "Chế biến"
+   - Nước mắm, gia vị, dầu hào, đồ khô -> "Khác"
+
+4. Quy cách / kích cỡ (size):
+   - "size 14-16c", "size 20-25c", "loại 1", "loại 2", "cấp đông", "tươi sống",...
+
+Trả về định dạng JSON thuần túy (không bọc trong markdown):
+{
+  "title": "Bảng giá hải sản",
+  "items": [
+    {
+      "product_name": "Nước mắm sá sùng",
+      "category": "Khác",
+      "unit": "lít",
+      "unit_price": 155000,
+      "total_price": 155000,
+      "package_qty": 1,
+      "raw_price_str": "155k/lít",
+      "size": "",
+      "note": "155k/lít"
+    },
+    {
+      "product_name": "Chả mực",
+      "category": "Chế biến",
+      "unit": "hộp",
+      "unit_price": 105000,
+      "total_price": 210000,
+      "package_qty": 2,
+      "raw_price_str": "210/2hộp",
+      "size": "Loại 1",
+      "note": "210/2hộp (~105k/hộp)"
+    }
+  ]
+}`;
+
+      const contents: any[] = [];
+
+      if (imageBase64) {
+        const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/i, '').trim();
+        let mime = (imageMimeType || 'image/jpeg').toLowerCase();
+        if (mime.includes('png')) mime = 'image/png';
+        else if (mime.includes('webp')) mime = 'image/webp';
+        else if (mime.includes('heic') || mime.includes('heif')) mime = 'image/heic';
+        else mime = 'image/jpeg';
+
+        contents.push({
+          inlineData: {
+            mimeType: mime,
+            data: cleanBase64,
+          },
+        });
+      }
+
+      let userTextPrompt = rawText
+        ? `Nội dung bảng giá cần phân tích:\n${rawText}`
+        : 'Hãy đọc toàn bộ hình ảnh bảng giá hải sản này, bóc tách tên sản phẩm, đơn giá, đơn vị tính (đặc biệt các dạng như 155k/lít, 210/2hộp...), size và quy cách đóng gói.';
+
+      contents.push({
+        text: userTextPrompt,
+      });
+
+      console.log(`[AI Price Extractor] Calling Gemini (image: ${!!imageBase64}, text length: ${rawText ? rawText.length : 0})...`);
+
+      const { responseText, usedModel } = await callGeminiWithFallback(ai, {
+        contents: contents,
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: 'application/json',
+        },
+      });
+
+      let parsedJson: any = null;
+      try {
+        const cleanedText = (responseText || '').replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+        parsedJson = JSON.parse(cleanedText);
+      } catch (jsonErr) {
+        console.error('[AI Price Extractor] JSON parse error:', jsonErr, responseText);
+        if (rawText) {
+          const fallback = ruleBasedPriceListParser(rawText, existingProducts || [], knownCategories || []);
+          return res.json({
+            success: true,
+            source: 'rule_based_fallback',
+            data: { items: fallback },
+            warning: 'AI trả về phản hồi không đúng chuẩn JSON. Đã sử dụng bộ phân tích thông minh cục bộ.',
+          });
+        }
+        throw new Error('Dữ liệu AI trả về không đúng định dạng JSON. Vui lòng bấm thử lại.');
+      }
+
+      // Merge & compare with existing products
+      const rawItems = parsedJson.items || [];
+      const currentProds = existingProducts || [];
+      const currentCats = knownCategories || [];
+
+      const formattedItems = rawItems.map((it: any, idx: number) => {
+        const normName = (it.product_name || '').toLowerCase().trim();
+        const existing = currentProds.find(
+          (p: any) => (p.product_name || '').toLowerCase().trim() === normName
+        );
+
+        let unit = (it.unit || 'kg').toLowerCase().trim();
+        if (unit === 'lit') unit = 'lít';
+        if (unit === 'hop') unit = 'hộp';
+
+        const unitPrice = Math.round(Number(it.unit_price) || 0);
+        const pkgQty = Number(it.package_qty) || 1;
+
+        let status: 'NEW' | 'UPDATE' | 'UNCHANGED' = 'NEW';
+        let existingProductId: string | undefined = undefined;
+        let existingProductOldPrice: number | undefined = undefined;
+        let existingProductOldUnit: string | undefined = undefined;
+
+        if (existing) {
+          existingProductId = existing.product_id;
+          existingProductOldPrice = existing.default_price;
+          existingProductOldUnit = existing.unit;
+          status = existing.default_price === unitPrice ? 'UNCHANGED' : 'UPDATE';
+        }
+
+        return {
+          id: `price-item-${Date.now()}-${idx}`,
+          product_name: it.product_name ? it.product_name.trim() : 'Hải sản',
+          category: it.category || 'Hải sản',
+          unit: unit,
+          unit_price: unitPrice,
+          total_price: Number(it.total_price) || unitPrice * pkgQty,
+          package_qty: pkgQty,
+          raw_price_str: it.raw_price_str || `${unitPrice.toLocaleString()}đ/${unit}`,
+          size: it.size || '',
+          note: it.note || '',
+          selected: true,
+          status: status,
+          existingProductId: existingProductId,
+          existingProductOldPrice: existingProductOldPrice,
+          existingProductOldUnit: existingProductOldUnit,
+        };
+      });
+
+      return res.json({
+        success: true,
+        source: 'gemini_ai',
+        model: usedModel,
+        data: {
+          title: parsedJson.title || 'Bảng giá hải sản',
+          items: formattedItems,
+        },
+      });
+    } catch (error: any) {
+      console.error('Lỗi khi phân tích bảng giá bằng Gemini AI:', error);
+      if (req.body?.rawText) {
+        const fallback = ruleBasedPriceListParser(
+          req.body.rawText,
+          req.body.existingProducts || [],
+          req.body.knownCategories || []
+        );
+        return res.json({
+          success: true,
+          source: 'rule_based_fallback',
+          data: { items: fallback },
+          warning: 'Mô hình AI đang bận. Đã tự động sử dụng bộ phân tích thông minh cục bộ.',
+        });
+      }
+
+      const errMsg = error?.message || 'Đã xảy ra lỗi khi quét và xử lý bảng giá hải sản.';
+      const is503 = errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('UNAVAILABLE');
+
+      return res.status(is503 ? 503 : 500).json({
+        error: is503
+          ? 'Hệ thống AI Gemini hiện đang có lượng truy cập tăng đột biến. Vui lòng bấm thử lại hoặc dán văn bản bảng giá.'
+          : errMsg,
         isTemporary: is503,
       });
     }

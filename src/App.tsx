@@ -33,6 +33,7 @@ const MainLayout: React.FC = () => {
     setIsCreateCustomerOpen,
     isAIScanOpen,
     setIsAIScanOpen,
+    aiScanInitialTab,
     isSheetsSyncOpen,
     setIsSheetsSyncOpen,
     printModalConfig,
@@ -119,6 +120,7 @@ const MainLayout: React.FC = () => {
       <AIScanBatchModal
         isOpen={isAIScanOpen}
         onClose={() => setIsAIScanOpen(false)}
+        initialTab={aiScanInitialTab}
       />
 
       <GoogleSheetsSyncModal

@@ -42,6 +42,7 @@ export const ProductsView: React.FC = () => {
     updateCategory,
     deleteCategory,
     resetCategoriesToDefault,
+    openAIScanModal,
     addToast,
   } = useApp();
 
@@ -342,6 +343,17 @@ export const ProductsView: React.FC = () => {
           >
             <ListPlus className="w-4 h-4 text-teal-800" />
             <span>+ Thêm Nhanh DS Tên</span>
+          </button>
+
+          {/* Quick AI Scan Price Button */}
+          <button
+            id="scan-pricelist-btn"
+            onClick={() => openAIScanModal('PRICE_SCAN')}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold rounded-xl shadow-xs transition-all text-xs sm:text-sm cursor-pointer"
+            title="Quét ảnh hoặc dán bảng giá (tự động nhận diện 155k/lít, 210/2hộp, v.v.) và cập nhật vào danh mục"
+          >
+            <Sparkles className="w-4 h-4 text-amber-300" />
+            <span>📸 Quét Bảng Giá</span>
           </button>
 
           {/* Create Product Button */}

@@ -19,12 +19,15 @@ import {
   Layers,
   Image as ImageIcon,
   Edit2,
-  PackageCheck
+  PackageCheck,
+  Tag
 } from 'lucide-react';
+import { PriceListScannerView } from './PriceListScannerView';
 
 interface AIScanBatchModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: 'IMAGE' | 'TEXT' | 'PRICE_SCAN';
 }
 
 interface ParsedItem {
@@ -71,7 +74,7 @@ C Phô Mai: 1kg tuộc sữa + 1kg chả cá
 1606A: 1kg cá hố
 1707B: 0.5kg nõn sắt`;
 
-export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onClose }) => {
+export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onClose, initialTab }) => {
   const {
     products,
     customers,
@@ -87,7 +90,13 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
     addToast,
   } = useApp();
 
-  const [activeTab, setActiveTabMode] = useState<'IMAGE' | 'TEXT'>('IMAGE');
+  const [activeTab, setActiveTabMode] = useState<'IMAGE' | 'TEXT' | 'PRICE_SCAN'>(initialTab || 'IMAGE');
+
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTabMode(initialTab);
+    }
+  }, [isOpen, initialTab]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [imageMimeType, setImageMimeType] = useState<string>('image/jpeg');
   const [rawText, setRawText] = useState<string>('');
@@ -648,20 +657,26 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-black tracking-tight flex items-center gap-2">
-                <span>Quét Ảnh / Ghi Chú Tạo Đợt Gom Bằng AI</span>
+                <span>
+                  {activeTab === 'PRICE_SCAN'
+                    ? 'Quét & Tự Động Cập Nhật Giá Cho Danh Mục Hải Sản'
+                    : 'Quét Ảnh / Ghi Chú Tạo Đợt Gom Bằng AI'}
+                </span>
                 <span className="text-[10px] bg-amber-400 text-amber-950 font-black px-2 py-0.5 rounded-full uppercase">
                   Gemini 3.7 AI
                 </span>
               </h2>
               <p className="text-xs text-teal-100/90 font-medium">
-                Tự động nhận diện số phòng, tên cư dân, loại hải sản, định lượng kg/khay & quy cách
+                {activeTab === 'PRICE_SCAN'
+                  ? 'Tự động nhận diện 155k/lít, 210/2hộp, kg, khay, túi... tính toán đơn giá và cập nhật vào hệ thống'
+                  : 'Tự động nhận diện số phòng, tên cư dân, loại hải sản, định lượng kg/khay & quy cách'}
               </p>
             </div>
           </div>
 
           <button
             onClick={onClose}
-            className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-xl transition-colors"
+            className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -682,7 +697,7 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
                 <button
                   type="button"
                   onClick={() => handleStartAnalysis()}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition-all shadow-xs text-xs"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition-all shadow-xs text-xs cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" /> Thử Lại Ngay
                 </button>
@@ -690,34 +705,53 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
             </div>
           )}
 
-          {!parsedData ? (
-            /* Upload & Input Mode */
+          {/* Tab Selector */}
+          <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-100 rounded-2xl border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setActiveTabMode('IMAGE')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'IMAGE'
+                  ? 'bg-white text-teal-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Camera className="w-4 h-4" /> Quét Ảnh Đơn Hàng
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTabMode('TEXT')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'TEXT'
+                  ? 'bg-white text-teal-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <FileText className="w-4 h-4" /> Dán Ghi Chú Gom Đơn
+            </button>
+            <button
+              id="tab-price-scan-btn"
+              type="button"
+              onClick={() => setActiveTabMode('PRICE_SCAN')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                activeTab === 'PRICE_SCAN'
+                  ? 'bg-gradient-to-r from-teal-800 to-emerald-800 text-white shadow-xs'
+                  : 'text-emerald-800 hover:text-emerald-950 hover:bg-emerald-50'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>Quét & Cập Nhật Giá Hải Sản</span>
+              <span className="text-[10px] bg-amber-400 text-amber-950 px-1.5 py-0.2 rounded-full font-black">
+                Mới
+              </span>
+            </button>
+          </div>
+
+          {activeTab === 'PRICE_SCAN' ? (
+            <PriceListScannerView onClose={onClose} />
+          ) : !parsedData ? (
+            /* Upload & Input Mode for Orders */
             <div className="space-y-5">
-              {/* Tab Selector */}
-              <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-2xl border border-slate-200 w-fit">
-                <button
-                  type="button"
-                  onClick={() => setActiveTabMode('IMAGE')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    activeTab === 'IMAGE'
-                      ? 'bg-white text-teal-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Camera className="w-4 h-4" /> Quét / Tải Ảnh Lên
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTabMode('TEXT')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    activeTab === 'TEXT'
-                      ? 'bg-white text-teal-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <FileText className="w-4 h-4" /> Dán Ghi Chú / Zalo
-                </button>
-              </div>
 
               {activeTab === 'IMAGE' ? (
                 /* Image Upload Area */
