@@ -135,6 +135,18 @@ interface AppContextType {
   updateStoreSettings: (s: StoreSettings) => void;
   addProduct: (p: Product) => void;
   updateProduct: (p: Product) => void;
+  deleteProduct: (productId: string) => void;
+  bulkAddProducts: (newProducts: Partial<Product>[]) => void;
+  units: string[];
+  addUnit: (unit: string) => void;
+  updateUnit: (oldUnit: string, newUnit: string) => void;
+  deleteUnit: (unit: string) => void;
+  resetUnitsToDefault: () => void;
+  categories: string[];
+  addCategory: (cat: string) => void;
+  updateCategory: (oldCat: string, newCat: string) => void;
+  deleteCategory: (cat: string) => void;
+  resetCategoriesToDefault: () => void;
   addCustomer: (c: Customer) => void;
   updateCustomer: (c: Customer) => void;
   addBatch: (b: Batch) => void;
@@ -185,6 +197,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [orders, setOrders] = useState<Order[]>([]);
   const [payments, setPayments] = useState<PaymentTransaction[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [units, setUnits] = useState<string[]>(() => storage.getUnits());
+  const [categories, setCategories] = useState<string[]>(() => storage.getCategories());
 
   // Google Sheets Sync States
   const [syncStatus, setSyncStatus] = useState<SyncStatusType>('IDLE');
@@ -278,6 +292,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setOrders(freshOrders);
     setPayments(storage.getPayments());
     setAuditLogs(storage.getAuditLogs());
+    setUnits(storage.getUnits());
+    setCategories(storage.getCategories());
 
     const curBatchId = storage.getCurrentBatchId();
     if (freshBatches.length > 0) {
@@ -480,6 +496,71 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setProducts(storage.getProducts());
     addToast('success', 'Đã cập nhật hải sản', `${product.product_name} - Đang đồng bộ lên Google Sheets...`);
     executeAutoSync(true);
+  };
+
+  const deleteProduct = (productId: string) => {
+    storage.deleteProduct(productId);
+    setProducts(storage.getProducts());
+    addToast('info', 'Đã xóa hải sản', 'Đã xóa sản phẩm khỏi danh mục');
+    executeAutoSync(true);
+  };
+
+  const bulkAddProducts = (newProducts: Partial<Product>[]) => {
+    storage.bulkAddProducts(newProducts);
+    setProducts(storage.getProducts());
+    addToast('success', 'Thêm danh sách hải sản thành công', 'Đã cập nhật danh mục hải sản');
+    executeAutoSync(true);
+  };
+
+  const addUnit = (unitName: string) => {
+    const updated = storage.addUnit(unitName);
+    setUnits([...updated]);
+    addToast('success', 'Đã thêm đơn vị tính', `Đơn vị mới: ${unitName}`);
+  };
+
+  const updateUnit = (oldUnit: string, newUnit: string) => {
+    const updated = storage.updateUnit(oldUnit, newUnit);
+    setUnits([...updated]);
+    setProducts(storage.getProducts());
+    addToast('success', 'Đã cập nhật đơn vị tính', `${oldUnit} -> ${newUnit}`);
+    executeAutoSync(true);
+  };
+
+  const deleteUnit = (unitName: string) => {
+    const updated = storage.deleteUnit(unitName);
+    setUnits([...updated]);
+    addToast('info', 'Đã xóa đơn vị tính', `Đã xóa: ${unitName}`);
+  };
+
+  const resetUnitsToDefault = () => {
+    const updated = storage.resetUnits();
+    setUnits([...updated]);
+    addToast('info', 'Đã khôi phục đơn vị mặc định', 'Đã đặt lại danh sách ĐVT ban đầu');
+  };
+
+  const addCategory = (cat: string) => {
+    const updated = storage.addCategory(cat);
+    setCategories([...updated]);
+    addToast('success', 'Đã thêm danh mục mới', `Danh mục: ${cat.trim()}`);
+  };
+
+  const updateCategory = (oldCat: string, newCat: string) => {
+    const updated = storage.updateCategory(oldCat, newCat);
+    setCategories([...updated]);
+    setProducts(storage.getProducts());
+    addToast('success', 'Đã cập nhật danh mục', `${oldCat} → ${newCat}`);
+  };
+
+  const deleteCategory = (catName: string) => {
+    const updated = storage.deleteCategory(catName);
+    setCategories([...updated]);
+    addToast('info', 'Đã xóa danh mục', `Đã xóa: ${catName}`);
+  };
+
+  const resetCategoriesToDefault = () => {
+    const updated = storage.resetCategories();
+    setCategories([...updated]);
+    addToast('info', 'Đã khôi phục danh mục mặc định', 'Đã đặt lại danh sách danh mục ban đầu');
   };
 
   const addCustomer = (customer: Customer) => {
@@ -776,6 +857,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateStoreSettings: updateSettings,
         addProduct,
         updateProduct,
+        deleteProduct,
+        bulkAddProducts,
+        units,
+        addUnit,
+        updateUnit,
+        deleteUnit,
+        resetUnitsToDefault,
+        categories,
+        addCategory,
+        updateCategory,
+        deleteCategory,
+        resetCategoriesToDefault,
         addCustomer,
         updateCustomer,
         addBatch,

@@ -25,7 +25,37 @@ const STORAGE_KEYS = {
   CURRENT_BATCH_ID: 'seafood_app_current_batch_id_v1',
   SNAPSHOTS: 'seafood_app_snapshots_v1',
   LAST_AUTO_BACKUP: 'seafood_app_last_auto_backup_v1',
+  UNITS: 'seafood_app_units_v1',
+  CATEGORIES: 'seafood_app_categories_v1',
 };
+
+export const DEFAULT_CATEGORIES: string[] = [
+  'Tôm',
+  'Cua',
+  'Ghẹ',
+  'Cá biển',
+  'Mực',
+  'Ốc & Ngao',
+  'Đồ khô & Chế biến',
+  'Khác',
+];
+
+export const DEFAULT_UNITS: string[] = [
+  'kg',
+  'hộp',
+  'khay',
+  'con',
+  'chai',
+  'lon',
+  'túi',
+  'bịch',
+  'gram',
+  'thùng',
+  'phần',
+  'combo',
+  'rế',
+  'xù',
+];
 
 export const DEFAULT_SETTINGS: StoreSettings = {
   store_name: 'Hải Sản Mẹ Hường',
@@ -466,6 +496,186 @@ class StorageService {
       this.saveProducts(products);
       this.logAudit('UPDATE_PRODUCT', 'PRODUCT', products[index].product_id, `Cập nhật sản phẩm: ${products[index].product_name}`);
     }
+  }
+
+  public deleteProduct(productId: string): void {
+    const products = this.getProducts();
+    const target = products.find((p) => p.product_id === productId);
+    const next = products.filter((p) => p.product_id !== productId);
+    this.saveProducts(next);
+    if (target) {
+      this.logAudit('DELETE_PRODUCT', 'PRODUCT', productId, `Xóa sản phẩm hải sản khỏi danh mục: ${target.product_name}`);
+    }
+  }
+
+  public bulkAddProducts(newProducts: Partial<Product>[]): Product[] {
+    const current = this.getProducts();
+    const added: Product[] = [];
+
+    for (const p of newProducts) {
+      if (!p.product_name || !p.product_name.trim()) continue;
+      const trimmedName = p.product_name.trim();
+      const normName = normalizeProductName(trimmedName);
+
+      const exists = current.some((cp) => normalizeProductName(cp.product_name) === normName);
+      if (!exists) {
+        const timestamp = Date.now() + Math.floor(Math.random() * 1000);
+        const newProd: Product = {
+          product_id: p.product_id || `PROD-${timestamp}`,
+          sku: p.sku || `HS-${timestamp.toString().slice(-4)}`,
+          product_name: trimmedName,
+          category: p.category || 'Khác',
+          size: p.size || '',
+          origin: p.origin || '',
+          unit: p.unit || 'kg',
+          default_price: Number(p.default_price) || 200000,
+          description: p.description || '',
+          status: p.status || 'ACTIVE',
+        };
+        current.unshift(newProd);
+        added.push(newProd);
+      }
+    }
+
+    if (added.length > 0) {
+      this.saveProducts(current);
+      this.logAudit('BULK_CREATE_PRODUCTS', 'PRODUCT', `COUNT-${added.length}`, `Thêm nhanh ${added.length} hải sản vào danh mục`);
+    }
+    return current;
+  }
+
+  // Units Management (Kg, Hộp, Khay, Con, Chai,...)
+  public getUnits(): string[] {
+    const units = this.get<string[]>(STORAGE_KEYS.UNITS, DEFAULT_UNITS);
+    if (!Array.isArray(units) || units.length === 0) {
+      return DEFAULT_UNITS;
+    }
+    return units;
+  }
+
+  public saveUnits(units: string[]): void {
+    const cleaned = Array.from(new Set(units.map((u) => (u || '').trim()).filter(Boolean)));
+    this.set(STORAGE_KEYS.UNITS, cleaned);
+  }
+
+  public addUnit(unit: string): string[] {
+    const current = this.getUnits();
+    const cleanUnit = (unit || '').trim();
+    if (!cleanUnit) return current;
+    if (!current.some((u) => u.toLowerCase() === cleanUnit.toLowerCase())) {
+      const next = [...current, cleanUnit];
+      this.saveUnits(next);
+      this.logAudit('CREATE_UNIT', 'SETTINGS', cleanUnit, `Thêm đơn vị tính mới: ${cleanUnit}`);
+      return next;
+    }
+    return current;
+  }
+
+  public updateUnit(oldUnit: string, newUnit: string): string[] {
+    const current = this.getUnits();
+    const cleanOld = (oldUnit || '').trim();
+    const cleanNew = (newUnit || '').trim();
+    if (!cleanNew) return current;
+
+    const next = current.map((u) => (u.toLowerCase() === cleanOld.toLowerCase() ? cleanNew : u));
+    this.saveUnits(next);
+
+    // Also update any products using this unit
+    const products = this.getProducts();
+    let prodsChanged = false;
+    const updatedProds = products.map((p) => {
+      if (p.unit && p.unit.toLowerCase() === cleanOld.toLowerCase()) {
+        prodsChanged = true;
+        return { ...p, unit: cleanNew };
+      }
+      return p;
+    });
+    if (prodsChanged) {
+      this.saveProducts(updatedProds);
+    }
+
+    this.logAudit('UPDATE_UNIT', 'SETTINGS', cleanNew, `Đổi tên đơn vị tính từ ${cleanOld} sang ${cleanNew}`);
+    return next;
+  }
+
+  public deleteUnit(unit: string): string[] {
+    const current = this.getUnits();
+    const cleanUnit = (unit || '').trim().toLowerCase();
+    const next = current.filter((u) => u.toLowerCase() !== cleanUnit);
+    this.saveUnits(next);
+    this.logAudit('DELETE_UNIT', 'SETTINGS', cleanUnit, `Xóa đơn vị tính: ${unit.trim()}`);
+    return next;
+  }
+
+  public resetUnits(): string[] {
+    this.saveUnits(DEFAULT_UNITS);
+    return DEFAULT_UNITS;
+  }
+
+  // Categories Management (Tôm, Cua, Ghẹ, Mực, Cá biển,...)
+  public getCategories(): string[] {
+    const categories = this.get<string[]>(STORAGE_KEYS.CATEGORIES, DEFAULT_CATEGORIES);
+    if (!Array.isArray(categories) || categories.length === 0) {
+      return DEFAULT_CATEGORIES;
+    }
+    return categories;
+  }
+
+  public saveCategories(categories: string[]): void {
+    const cleaned = Array.from(new Set(categories.map((c) => (c || '').trim()).filter(Boolean)));
+    this.set(STORAGE_KEYS.CATEGORIES, cleaned);
+  }
+
+  public addCategory(cat: string): string[] {
+    const current = this.getCategories();
+    const cleanCat = (cat || '').trim();
+    if (!cleanCat) return current;
+    if (!current.some((c) => c.toLowerCase() === cleanCat.toLowerCase())) {
+      const next = [...current, cleanCat];
+      this.saveCategories(next);
+      this.logAudit('CREATE_CATEGORY', 'SETTINGS', cleanCat, `Thêm danh mục hải sản mới: ${cleanCat}`);
+      return next;
+    }
+    return current;
+  }
+
+  public updateCategory(oldCat: string, newCat: string): string[] {
+    const current = this.getCategories();
+    const cleanOld = (oldCat || '').trim();
+    const cleanNew = (newCat || '').trim();
+    if (!cleanNew) return current;
+
+    const next = current.map((c) => (c.toLowerCase() === cleanOld.toLowerCase() ? cleanNew : c));
+    this.saveCategories(next);
+
+    // Also update any products using this category
+    const products = this.getProducts();
+    let changed = false;
+    const updated = products.map((p) => {
+      if (p.category && p.category.toLowerCase() === cleanOld.toLowerCase()) {
+        changed = true;
+        return { ...p, category: cleanNew };
+      }
+      return p;
+    });
+    if (changed) this.saveProducts(updated);
+
+    this.logAudit('UPDATE_CATEGORY', 'SETTINGS', cleanNew, `Đổi tên danh mục từ ${cleanOld} sang ${cleanNew}`);
+    return next;
+  }
+
+  public deleteCategory(cat: string): string[] {
+    const current = this.getCategories();
+    const cleanCat = (cat || '').trim().toLowerCase();
+    const next = current.filter((c) => c.toLowerCase() !== cleanCat);
+    this.saveCategories(next);
+    this.logAudit('DELETE_CATEGORY', 'SETTINGS', cat.trim(), `Xóa danh mục hải sản: ${cat.trim()}`);
+    return next;
+  }
+
+  public resetCategories(): string[] {
+    this.saveCategories(DEFAULT_CATEGORIES);
+    return DEFAULT_CATEGORIES;
   }
 
   // Customers

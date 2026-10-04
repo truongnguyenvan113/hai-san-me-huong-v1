@@ -159,20 +159,24 @@ function ruleBasedTextParser(text: string) {
         name = name.replace(/(?:size|sz\s*)?\d{1,2}[\-\/]\d{1,2}\s*c\b/gi, '').replace(/s(?:ize|z)\s*[\d-]+/gi, '').trim();
       }
 
-      // Match patterns like "0.5kg", "0,5kg", "1 kg", "2c", "3c", "1 xù", "1 rế", "2 rế", "0.5"
-      const qtyMatch = name.match(/^([\d.,]+)\s*(kg|k|g|gram|khay|hộp|túi|con|c|rế|xù|mẹt)?\s*(.*)$/i);
+      // Match patterns like "0.5kg", "0,5kg", "1 kg", "2c", "3c", "1 xù", "1 rế", "2 rế", "1 chai", "2 lon", "0.5"
+      const qtyMatch = name.match(/^([\d.,]+)\s*(kg|k|g|gram|khay|hộp|túi|chai|lon|bịch|thùng|phần|con|c|rế|xù|mẹt)?\s*(.*)$/i);
       if (qtyMatch) {
         qty = parseFloat(qtyMatch[1].replace(',', '.')) || 1;
         const matchedUnit = (qtyMatch[2] || '').toLowerCase();
-        let rest = qtyMatch[3] || '';
+        let rest = (qtyMatch[3] || '').trim();
 
         if (matchedUnit === 'rế') {
           unit = 'khay';
-          name = 'Rế hải sản';
+          name = 'Rế';
         } else if (matchedUnit === 'xù') {
           unit = 'hộp';
-          name = 'Tôm/chả chiên xù';
-        } else if (matchedUnit === 'c' || matchedUnit === 'con') {
+          name = 'Tôm xù';
+        } else if (matchedUnit === 'c') {
+          // Rule: 1c | 2c | 3c corresponds to 1kg | 2kg | 3kg
+          unit = 'kg';
+          name = rest;
+        } else if (matchedUnit === 'con') {
           unit = 'con';
           name = rest;
         } else if (matchedUnit === 'khay') {
@@ -180,6 +184,21 @@ function ruleBasedTextParser(text: string) {
           name = rest;
         } else if (matchedUnit === 'hộp') {
           unit = 'hộp';
+          name = rest;
+        } else if (matchedUnit === 'chai') {
+          unit = 'chai';
+          name = rest;
+        } else if (matchedUnit === 'lon') {
+          unit = 'lon';
+          name = rest;
+        } else if (matchedUnit === 'bịch') {
+          unit = 'bịch';
+          name = rest;
+        } else if (matchedUnit === 'thùng') {
+          unit = 'thùng';
+          name = rest;
+        } else if (matchedUnit === 'phần') {
+          unit = 'phần';
           name = rest;
         } else if (matchedUnit === 'g' || matchedUnit === 'gram') {
           unit = 'gram';
@@ -190,53 +209,17 @@ function ruleBasedTextParser(text: string) {
         }
       }
 
-      // Specialized shorthands
-      const lowerName = name.toLowerCase().trim();
-      if (lowerName === 'xù' || lowerName === '1 xù') {
-        name = 'Tôm/chả chiên xù';
+      // Preserve verbatim seafood name without embellishing
+      const trimmedCleanName = (name || '').trim();
+      if (trimmedCleanName.toLowerCase() === 'xù' || trimmedCleanName.toLowerCase() === '1 xù') {
+        name = 'Tôm xù';
         unit = 'hộp';
-      } else if (lowerName === 'rế' || lowerName === '1 rế' || lowerName === '2 rế') {
-        name = 'Rế hải sản';
+      } else if (trimmedCleanName.toLowerCase() === 'rế' || trimmedCleanName.toLowerCase() === '1 rế' || trimmedCleanName.toLowerCase() === '2 rế') {
+        name = 'Rế';
         unit = 'khay';
-      } else if (lowerName.includes('mực nhỏ') || lowerName.includes('mứch nh') || lowerName.includes('mực nh')) {
-        name = 'Mực nhỏ tươi';
-        unit = 'kg';
-      } else if (lowerName.includes('tôm he') || lowerName.startsWith('he ')) {
-        name = 'Tôm he biển tươi';
-        unit = 'kg';
-      } else if (lowerName.includes('mực trứng')) {
-        name = 'Mực trứng tươi';
-        unit = 'kg';
-      } else if (lowerName.includes('mực ống')) {
-        name = 'Mực ống tươi';
-        unit = 'kg';
-      } else if (lowerName.includes('chả cá pha mực')) {
-        name = 'Chả cá pha mực';
-        unit = 'kg';
-      } else if (lowerName.includes('nõn bề bề')) {
-        name = 'Nõn bề bề bóc sẵn';
-        unit = 'kg';
-      } else if (lowerName.includes('ruột dắt') || lowerName.includes('dắt')) {
-        name = 'Ruột dắt biển tươi';
-        unit = 'kg';
-      } else if (lowerName.includes('cá thu 1 nắng') || lowerName.includes('thu 1 nắng')) {
-        name = 'Cá thu một nắng';
-        unit = 'kg';
-      } else if (lowerName.includes('cá mối')) {
-        name = 'Cá mối tươi';
-        unit = 'kg';
-      } else if (lowerName.includes('cá nục')) {
-        name = 'Cá nục tươi';
-        unit = 'kg';
-      } else if (lowerName.includes('ghẹ sữa')) {
-        name = 'Ghẹ sữa';
-        unit = unit === 'con' ? 'con' : 'kg';
-      } else if (lowerName.includes('ghẹ lưới')) {
-        name = 'Ghẹ lưới tươi';
-        unit = unit === 'con' ? 'con' : 'kg';
-      } else if (lowerName.includes('ốc biển') || lowerName === 'ốc') {
-        name = 'Ốc biển tươi';
-        unit = 'kg';
+      } else if (trimmedCleanName) {
+        // Capitalize first letter of verbatim name without altering
+        name = trimmedCleanName.charAt(0).toUpperCase() + trimmedCleanName.slice(1);
       }
 
       name = name.trim();
@@ -396,11 +379,23 @@ QUY TẮC PHÂN TÍCH TÊN CĂN HỘ & TÒA NHÀ:
   + room: Số phòng nếu có hoặc "Khách quen"
   + building: "Tòa A" (mặc định)
 
-QUY TẮC GIÁ & ĐƠN VỊ:
-- "K" = nghìn đồng (ví dụ: 280K = 280.000đ, 145K = 145.000đ, 55K = 55.000đ).
-- "c" = con (ví dụ: "2c ghẹ sữa" = 2 con, "14-16c" = Size 14-16 con/kg).
+QUY TẮC GIỮ NGUYÊN TÊN HẢI SẢN (CỰC KỲ QUAN TRỌNG - TUYỆT ĐỐI KHÔNG TỰ BIẾN TẤU):
+- GIỮ NGUYÊN TÊN HẢI SẢN THEO GHI CHÚ GỐC, KHÔNG ĐƯỢC TỰ Ý THÊM ĐỊA DANH HOẶC TÍNH TỪ VÀO TÊN.
+  + Ví dụ ghi chú: "1kg mực trứng" -> product_name: "Mực trứng" (TUYỆT ĐỐI KHÔNG đổi thành "Mực Trứng Phú Quốc Cấp Đông Tàu").
+  + Ví dụ ghi chú: "3c ghẹ lưới" -> product_name: "Ghẹ lưới" (TUYỆT ĐỐI KHÔNG đổi thành "Ghẹ Xanh Phan Thiết").
+  + Ví dụ ghi chú: "cá bơn" -> product_name: "Cá bơn".
+  + Ví dụ ghi chú: "cá bạc má" -> product_name: "Cá bạc má".
+  + Ví dụ ghi chú: "chả mực" -> product_name: "Chả mực".
+  + Ví dụ ghi chú: "tuộc sữa" -> product_name: "Tuộc sữa".
+  + Ví dụ ghi chú: "cá mối" -> product_name: "Cá mối".
+  + Ví dụ ghi chú: "nõn sắt" -> product_name: "Nõn sắt".
+
+QUY TẮC ĐƠN VỊ VÀ 1c | 2c | 3c:
+- "1c | 2c | 3c..." tương ứng số lượng là 1kg | 2kg | 3kg (Đơn vị tính là 'kg'). Ví dụ "3c ghẹ lưới" -> quantity: 3, unit: "kg", product_name: "Ghẹ lưới".
+- Hỗ trợ các đơn vị tính: 'kg', 'hộp', 'khay', 'con', 'chai', 'lon', 'bịch', 'thùng', 'phần', 'gram', 'túi'.
 - "xù" = Tôm/chả chiên xù (Đơn vị: 'hộp').
 - "rế" = Rế hải sản (Đơn vị: 'khay').
+- "K" = nghìn đồng (ví dụ: 280K = 280.000đ, 145K = 145.000đ, 55K = 55.000đ).
 - "done", "donr", "dine" = Đã xử lý xong.
 - "chưa giao" = Chưa giao hàng.
 

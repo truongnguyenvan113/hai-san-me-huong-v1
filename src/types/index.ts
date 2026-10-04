@@ -1,4 +1,4 @@
-export type UnitType = 'kg' | 'gram' | 'con' | 'hộp' | 'túi' | 'khay' | 'combo';
+export type UnitType = 'kg' | 'gram' | 'con' | 'hộp' | 'túi' | 'khay' | 'chai' | 'lon' | 'bịch' | 'thùng' | 'phần' | 'combo' | string;
 
 export type ProcessingOption = 
   | 'Nguyên con'

@@ -80,6 +80,8 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
     addOrder,
     addCustomer,
     addProduct,
+    units,
+    addUnit,
     setSelectedBatchId,
     setActiveTab,
     addToast,
@@ -319,10 +321,104 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
     const newOrders = [...parsedData.orders];
     const order = { ...newOrders[orderIndex] };
     const items = [...order.items];
-    items[itemIndex] = { ...items[itemIndex], [field]: value };
+    const updatedItem = { ...items[itemIndex], [field]: value };
+
+    // Auto-match product price, unit and size if user enters a product from catalog
+    if (field === 'product_name' && typeof value === 'string' && value.trim()) {
+      const match = products.find(
+        (p) => p.product_name.toLowerCase().trim() === value.toLowerCase().trim()
+      );
+      if (match) {
+        if (!updatedItem.estimated_price || updatedItem.estimated_price === 200000) {
+          updatedItem.estimated_price = match.default_price;
+        }
+        if (match.unit) {
+          updatedItem.unit = match.unit;
+        }
+        if (match.size && !updatedItem.size) {
+          updatedItem.size = match.size;
+        }
+      }
+    }
+
+    items[itemIndex] = updatedItem;
     order.items = items;
     newOrders[orderIndex] = order;
     setParsedData({ ...parsedData, orders: newOrders });
+  };
+
+  const handleUpdateOrderHeader = (
+    orderIndex: number,
+    field: keyof ParsedOrder,
+    value: string
+  ) => {
+    if (!parsedData) return;
+    const newOrders = [...parsedData.orders];
+    const prevOrder = newOrders[orderIndex];
+    const updated = { ...prevOrder, [field]: value };
+
+    // If changing room, auto-update customer_name if it was a default placeholder
+    if (field === 'room') {
+      const trimmedVal = value.trim();
+      if (
+        !prevOrder.customer_name ||
+        prevOrder.customer_name === `Căn ${prevOrder.room}` ||
+        prevOrder.customer_name.startsWith('Căn ')
+      ) {
+        updated.customer_name = trimmedVal ? `Căn ${trimmedVal}` : 'Căn hộ';
+      }
+    }
+
+    newOrders[orderIndex] = updated;
+    setParsedData({ ...parsedData, orders: newOrders });
+  };
+
+  const handleAddNewOrder = () => {
+    if (!parsedData) return;
+    const newOrder: ParsedOrder = {
+      id: `ord-manual-${Date.now()}`,
+      room: '',
+      building: 'Tòa A',
+      customer_name: 'Căn mới',
+      phone: '',
+      items: [
+        {
+          product_name: '',
+          quantity: 1,
+          unit: 'kg',
+          size: '',
+          estimated_price: 200000,
+          processing_note: '',
+          item_note: '',
+        },
+      ],
+    };
+    setParsedData({
+      ...parsedData,
+      orders: [newOrder, ...parsedData.orders],
+    });
+  };
+
+  const handleSaveProductToCatalog = (name: string, unit: string, price: number) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    const exists = products.some(
+      (p) => p.product_name.toLowerCase().trim() === trimmed.toLowerCase()
+    );
+    if (!exists) {
+      addProduct({
+        product_id: `PROD-${Date.now()}`,
+        sku: `HS-${Date.now().toString().slice(-4)}`,
+        product_name: trimmed,
+        category: 'Hải sản',
+        unit: unit || 'kg',
+        default_price: price || 200000,
+        status: 'ACTIVE',
+      });
+      addToast('success', 'Đã lưu vào danh mục hải sản', trimmed);
+    } else {
+      addToast('info', 'Hải sản đã tồn tại', `Món "${trimmed}" đã có trong danh mục`);
+    }
   };
 
   const handleDeleteItem = (orderIndex: number, itemIndex: number) => {
@@ -827,11 +923,20 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
 
               {/* List of Parsed Orders */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between text-xs font-black text-slate-700 uppercase tracking-wider px-1">
-                  <span>Danh Sách Đơn Hàng Cư Dân ({parsedData.orders.length} đơn)</span>
-                  <span className="text-[11px] text-slate-500 font-normal lowercase">
-                    (bạn có thể chỉnh sửa số lượng, giá hoặc xóa món trước khi tạo)
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-black text-slate-700 uppercase tracking-wider px-1">
+                  <div className="flex items-center gap-2">
+                    <span>Danh Sách Đơn Hàng Cư Dân ({parsedData.orders.length} đơn)</span>
+                    <span className="text-[11px] text-teal-800 font-bold lowercase normal-case">
+                      (Có thể sửa trực tiếp Số phòng, Tòa, Tên khách hoặc thêm món)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddNewOrder}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs font-bold shadow-xs transition-all"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> + Thêm Căn Hộ / Phòng Mới
+                  </button>
                 </div>
 
                 <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
@@ -840,119 +945,190 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
                       key={order.id}
                       className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs hover:border-teal-300 transition-all space-y-3"
                     >
-                      {/* Order Room Header */}
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                        <div className="flex items-center gap-2.5">
-                          <div className="px-2.5 py-1 bg-teal-800 text-white font-black text-xs rounded-lg flex items-center gap-1">
-                            <Home className="w-3.5 h-3.5" />
-                            <span>{order.building} - P.{order.room}</span>
-                          </div>
-                          <span className="font-bold text-slate-900 text-xs sm:text-sm">
-                            {order.customer_name}
-                          </span>
-                        </div>
+                      {/* Order Room Header - Fully Editable for Room, Building, Customer Name & Phone */}
+                      <div className="bg-slate-50/90 p-3 rounded-xl border border-slate-200/80 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2 text-xs flex-1">
+                            {/* Room Input */}
+                            <div className="flex items-center bg-white border border-teal-400 rounded-lg px-2.5 py-1.5 shadow-2xs focus-within:ring-2 focus-within:ring-teal-700">
+                              <Home className="w-3.5 h-3.5 text-teal-800 mr-1.5 shrink-0" />
+                              <span className="text-[11px] font-bold text-slate-600 mr-1 shrink-0">Phòng:</span>
+                              <input
+                                type="text"
+                                value={order.room}
+                                onChange={(e) => handleUpdateOrderHeader(oIdx, 'room', e.target.value)}
+                                placeholder="1903A"
+                                className="font-black text-teal-950 w-20 outline-none text-xs bg-transparent"
+                                title="Bấm vào để đổi số phòng"
+                              />
+                            </div>
 
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleAddItemToOrder(oIdx)}
-                            className="p-1.5 text-teal-800 hover:bg-teal-50 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
-                            title="Thêm món cho phòng này"
-                          >
-                            <Plus className="w-3.5 h-3.5" /> Thêm món
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteOrder(oIdx)}
-                            className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg text-xs transition-colors"
-                            title="Xóa đơn của phòng này"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                            {/* Building Input */}
+                            <div className="flex items-center bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-2xs focus-within:ring-2 focus-within:ring-teal-700">
+                              <Building className="w-3.5 h-3.5 text-slate-500 mr-1.5 shrink-0" />
+                              <span className="text-[11px] font-bold text-slate-600 mr-1 shrink-0">Tòa:</span>
+                              <input
+                                type="text"
+                                list="scan-building-list"
+                                value={order.building}
+                                onChange={(e) => handleUpdateOrderHeader(oIdx, 'building', e.target.value)}
+                                placeholder="Tòa A"
+                                className="font-bold text-slate-800 w-16 outline-none text-xs bg-transparent"
+                                title="Bấm vào để đổi tòa nhà"
+                              />
+                            </div>
+
+                            {/* Customer Name Input */}
+                            <div className="flex items-center bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-2xs focus-within:ring-2 focus-within:ring-teal-700 flex-1 min-w-[140px]">
+                              <span className="text-[11px] font-bold text-slate-600 mr-1 shrink-0">Tên/Ghi chú:</span>
+                              <input
+                                type="text"
+                                value={order.customer_name}
+                                onChange={(e) => handleUpdateOrderHeader(oIdx, 'customer_name', e.target.value)}
+                                placeholder="Tên cư dân / Khách hàng"
+                                className="font-bold text-slate-900 w-full outline-none text-xs bg-transparent"
+                                title="Bấm vào để sửa tên cư dân"
+                              />
+                            </div>
+
+                            {/* Phone Input (Optional) */}
+                            <div className="flex items-center bg-white border border-slate-300 rounded-lg px-2 py-1.5 shadow-2xs focus-within:ring-2 focus-within:ring-teal-700 w-28">
+                              <span className="text-[11px] font-bold text-slate-600 mr-1 shrink-0">SĐT:</span>
+                              <input
+                                type="text"
+                                value={order.phone || ''}
+                                onChange={(e) => handleUpdateOrderHeader(oIdx, 'phone', e.target.value)}
+                                placeholder="09..."
+                                className="font-mono text-slate-800 w-full outline-none text-xs bg-transparent"
+                                title="Số điện thoại cư dân"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 ml-auto">
+                            <button
+                              type="button"
+                              onClick={() => handleAddItemToOrder(oIdx)}
+                              className="px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors border border-teal-200"
+                              title="Thêm món cho phòng này"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Thêm món
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteOrder(oIdx)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg text-xs transition-colors"
+                              title="Xóa đơn của phòng này"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </div>
 
                       {/* Items Table */}
                       <div className="space-y-2">
-                        {order.items.map((item, itIdx) => (
-                          <div
-                            key={itIdx}
-                            className="grid grid-cols-12 gap-2 items-center text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100"
-                          >
-                            {/* Product Name */}
-                            <div className="col-span-5 sm:col-span-4">
-                              <input
-                                type="text"
-                                value={item.product_name}
-                                onChange={(e) =>
-                                  handleUpdateItem(oIdx, itIdx, 'product_name', e.target.value)
-                                }
-                                className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg font-bold text-slate-900 focus:ring-1 focus:ring-teal-700"
-                                placeholder="Tên hải sản"
-                              />
-                            </div>
+                        {order.items.map((item, itIdx) => {
+                          const isKnownProduct = products.some(
+                            (p) => p.product_name.toLowerCase().trim() === (item.product_name || '').toLowerCase().trim()
+                          );
 
-                            {/* Quantity & Unit */}
-                            <div className="col-span-4 sm:col-span-3 flex items-center gap-1">
-                              <input
-                                type="number"
-                                step="0.1"
-                                min="0.1"
-                                value={item.quantity}
-                                onChange={(e) =>
-                                  handleUpdateItem(
-                                    oIdx,
-                                    itIdx,
-                                    'quantity',
-                                    parseFloat(e.target.value) || 1
-                                  )
-                                }
-                                className="w-16 px-2 py-1 bg-white border border-slate-200 rounded-lg font-bold text-slate-900 text-center focus:ring-1 focus:ring-teal-700 font-mono"
-                              />
-                              <select
-                                value={item.unit}
-                                onChange={(e) =>
-                                  handleUpdateItem(oIdx, itIdx, 'unit', e.target.value as UnitType)
-                                }
-                                className="px-1.5 py-1 bg-white border border-slate-200 rounded-lg text-[11px] font-bold"
-                              >
-                                <option value="kg">kg</option>
-                                <option value="gram">gram</option>
-                                <option value="khay">khay</option>
-                                <option value="hộp">hộp</option>
-                                <option value="con">con</option>
-                                <option value="túi">túi</option>
-                              </select>
-                            </div>
+                          return (
+                            <div
+                              key={itIdx}
+                              className="grid grid-cols-12 gap-2 items-center text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-100"
+                            >
+                              {/* Product Name with Datalist Suggestions */}
+                              <div className="col-span-5 sm:col-span-4">
+                                <div className="relative">
+                                  <input
+                                    type="text"
+                                    list="scan-catalog-products"
+                                    value={item.product_name}
+                                    onChange={(e) =>
+                                      handleUpdateItem(oIdx, itIdx, 'product_name', e.target.value)
+                                    }
+                                    className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg font-bold text-slate-900 focus:ring-1 focus:ring-teal-700"
+                                    placeholder="Tên hải sản (VD: Mực trứng, Ghẹ lưới...)"
+                                    title="Tên hải sản (gợi ý từ danh mục)"
+                                  />
+                                  {!isKnownProduct && item.product_name.trim() && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSaveProductToCatalog(item.product_name, item.unit, item.estimated_price)}
+                                      className="text-[10px] text-teal-800 hover:underline font-bold mt-0.5 block"
+                                      title="Lưu tên này vào danh mục hải sản của cửa hàng"
+                                    >
+                                      + Lưu vào danh mục
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
 
-                            {/* Size / Note */}
-                            <div className="col-span-3 sm:col-span-3">
-                              <input
-                                type="text"
-                                value={item.size || item.processing_note || ''}
-                                onChange={(e) =>
-                                  handleUpdateItem(oIdx, itIdx, 'size', e.target.value)
-                                }
-                                placeholder="Size/Sơ chế"
-                                className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg text-[11px] text-slate-600 focus:ring-1 focus:ring-teal-700"
-                              />
-                            </div>
+                              {/* Quantity & Unit (Configurable Units) */}
+                              <div className="col-span-4 sm:col-span-3 flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  min="0.1"
+                                  value={item.quantity}
+                                  onChange={(e) =>
+                                    handleUpdateItem(
+                                      oIdx,
+                                      itIdx,
+                                      'quantity',
+                                      parseFloat(e.target.value) || 1
+                                    )
+                                  }
+                                  className="w-16 px-2 py-1 bg-white border border-slate-200 rounded-lg font-bold text-slate-900 text-center focus:ring-1 focus:ring-teal-700 font-mono"
+                                />
+                                <select
+                                  value={item.unit}
+                                  onChange={(e) =>
+                                    handleUpdateItem(oIdx, itIdx, 'unit', e.target.value as UnitType)
+                                  }
+                                  className="px-1.5 py-1 bg-white border border-slate-200 rounded-lg text-[11px] font-bold focus:ring-1 focus:ring-teal-700"
+                                >
+                                  {units.map((u) => (
+                                    <option key={u} value={u}>
+                                      {u}
+                                    </option>
+                                  ))}
+                                  {!units.includes(item.unit) && (
+                                    <option value={item.unit}>{item.unit}</option>
+                                  )}
+                                </select>
+                              </div>
 
-                            {/* Delete Item */}
-                            <div className="col-span-12 sm:col-span-2 flex items-center justify-end gap-1.5 pt-1 sm:pt-0">
-                              <span className="font-bold text-teal-900 font-mono text-[11px]">
-                                {formatCurrency(item.quantity * item.estimated_price)}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteItem(oIdx, itIdx)}
-                                className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
+                              {/* Size / Note */}
+                              <div className="col-span-3 sm:col-span-3">
+                                <input
+                                  type="text"
+                                  value={item.size || item.processing_note || ''}
+                                  onChange={(e) =>
+                                    handleUpdateItem(oIdx, itIdx, 'size', e.target.value)
+                                  }
+                                  placeholder="Size/Sơ chế"
+                                  className="w-full px-2 py-1 bg-white border border-slate-200 rounded-lg text-[11px] text-slate-600 focus:ring-1 focus:ring-teal-700"
+                                />
+                              </div>
+
+                              {/* Delete Item & Subtotal */}
+                              <div className="col-span-12 sm:col-span-2 flex items-center justify-end gap-1.5 pt-1 sm:pt-0">
+                                <span className="font-bold text-teal-900 font-mono text-[11px]">
+                                  {formatCurrency(item.quantity * item.estimated_price)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteItem(oIdx, itIdx)}
+                                  className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -992,6 +1168,24 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
           )}
         </div>
       </div>
+
+      {/* Datalists for quick suggestions */}
+      <datalist id="scan-catalog-products">
+        {products.map((p) => (
+          <option key={p.product_id} value={p.product_name}>
+            {p.product_name} ({p.unit}) - {p.default_price.toLocaleString()}đ
+          </option>
+        ))}
+      </datalist>
+
+      <datalist id="scan-building-list">
+        <option value="Tòa A" />
+        <option value="Tòa B" />
+        <option value="Tòa C" />
+        <option value="Tòa S" />
+        <option value="Tòa R" />
+        <option value="Masteri" />
+      </datalist>
     </div>
   );
 };

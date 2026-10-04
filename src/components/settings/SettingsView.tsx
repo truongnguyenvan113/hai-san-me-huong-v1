@@ -30,6 +30,9 @@ import {
   RotateCcw,
   GitMerge,
   Trash2,
+  Scale,
+  Edit2,
+  Layers,
 } from 'lucide-react';
 import { ALL_BANKS, getBankByCodeOrName } from '../../utils/banks';
 
@@ -53,7 +56,22 @@ export const SettingsView: React.FC = () => {
     setIsCompareModalOpen,
     selectedCompareSnapshot,
     setSelectedCompareSnapshot,
+    units,
+    addUnit,
+    updateUnit,
+    deleteUnit,
+    resetUnitsToDefault,
+    categories,
+    addCategory,
+    updateCategory,
+    deleteCategory,
+    resetCategoriesToDefault,
   } = useApp();
+
+  const [newUnitInput, setNewUnitInput] = useState('');
+  const [editingUnitItem, setEditingUnitItem] = useState<{ oldName: string; newName: string } | null>(null);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [editingCategoryItem, setEditingCategoryItem] = useState<{ oldName: string; newName: string } | null>(null);
 
   const [formData, setFormData] = useState<StoreSettings>({ ...storeSettings });
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
@@ -498,6 +516,250 @@ export const SettingsView: React.FC = () => {
             <label htmlFor="show-vietqr-checkbox" className="text-xs sm:text-sm font-semibold text-slate-900 cursor-pointer">
               Tự động in kèm mã VietQR trên toàn bộ phiếu A4 để cư dân quét nhận hàng chuyển khoản
             </label>
+          </div>
+        </div>
+
+        {/* Section 4: Units Management (Kg, Hộp, Khay, Con, Chai...) */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2 text-teal-900 font-black text-base">
+              <Scale className="w-5 h-5 text-teal-800" /> Quản Lý Đơn Vị Tính (Kg, Hộp, Khay, Con, Chai, Lon, Bịch, Thùng...)
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Khôi phục danh sách đơn vị tính mặc định (kg, hộp, khay, con, chai...)?')) {
+                  resetUnitsToDefault();
+                }
+              }}
+              className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 font-medium cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" /> Khôi phục mặc định
+            </button>
+          </div>
+
+          <p className="text-xs text-slate-500">
+            Đơn vị tính này sẽ xuất hiện trong danh mục hải sản, đơn đặt hàng và giao diện quét ảnh AI. Bạn có thể thêm bất kỳ đơn vị nào (ví dụ: chai nước mắm, lon sốt me, thùng xốp, bịch muối ớt...).
+          </p>
+
+          {/* Add unit form */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newUnitInput}
+              onChange={(e) => setNewUnitInput(e.target.value)}
+              placeholder="Nhập đơn vị tính mới (VD: chai, lon, bịch, thùng, phần, rế, xù...)"
+              className="flex-1 px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold focus:bg-white focus:ring-2 focus:ring-teal-700 outline-none"
+            />
+            <button
+              type="button"
+              disabled={!newUnitInput.trim()}
+              onClick={() => {
+                if (newUnitInput.trim()) {
+                  addUnit(newUnitInput.trim());
+                  setNewUnitInput('');
+                }
+              }}
+              className="px-4 py-2 bg-teal-800 hover:bg-teal-900 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs shrink-0 cursor-pointer"
+            >
+              + Thêm Đơn Vị
+            </button>
+          </div>
+
+          {/* Inline Edit Unit form */}
+          {editingUnitItem && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
+              <div className="text-xs font-bold text-amber-900">
+                Đổi tên đơn vị tính: <span className="font-mono">{editingUnitItem.oldName}</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={editingUnitItem.newName}
+                  onChange={(e) =>
+                    setEditingUnitItem({ ...editingUnitItem, newName: e.target.value })
+                  }
+                  className="flex-1 px-3 py-1.5 text-xs bg-white border border-amber-300 rounded-lg font-bold outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const clean = editingUnitItem.newName.trim();
+                    if (clean && clean !== editingUnitItem.oldName) {
+                      updateUnit(editingUnitItem.oldName, clean);
+                    }
+                    setEditingUnitItem(null);
+                  }}
+                  className="px-3 py-1.5 bg-amber-700 text-white font-bold text-xs rounded-lg hover:bg-amber-800 cursor-pointer"
+                >
+                  Lưu
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingUnitItem(null)}
+                  className="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-300 cursor-pointer"
+                >
+                  Hủy
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* List of units */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+            {units.map((u) => (
+              <div
+                key={u}
+                className="flex items-center justify-between p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs hover:border-teal-300 transition-colors"
+              >
+                <span className="font-bold text-slate-900 font-mono">{u}</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setEditingUnitItem({ oldName: u, newName: u })}
+                    className="p-1 text-slate-400 hover:text-teal-800 rounded cursor-pointer"
+                    title="Đổi tên đơn vị này"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`Xóa đơn vị tính "${u}"?`)) {
+                        deleteUnit(u);
+                      }
+                    }}
+                    className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                    title="Xóa đơn vị này"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 6. Quản Lý Danh Mục Hải Sản (Categories) */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="w-5 h-5 text-indigo-700" />
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Danh Sách Danh Mục Hải Sản</h3>
+                <p className="text-xs text-slate-500">
+                  Tôm, Cua, Ghẹ, Cá biển, Mực, Ốc & Ngao, Đồ khô & Chế biến... Bạn có thể tự do thêm hoặc sửa.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Khôi phục danh sách danh mục mặc định ban đầu?')) {
+                  resetCategoriesToDefault();
+                }
+              }}
+              className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 font-medium cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" /> Đặt lại mặc định
+            </button>
+          </div>
+
+          {/* Form thêm danh mục mới */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newCategoryInput}
+              onChange={(e) => setNewCategoryInput(e.target.value)}
+              placeholder="Nhập tên danh mục mới (VD: Chả cá, Nước mắm, Đồ đông lạnh...)"
+              className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold focus:bg-white focus:ring-2 focus:ring-indigo-700 outline-none"
+            />
+            <button
+              type="button"
+              disabled={!newCategoryInput.trim()}
+              onClick={() => {
+                if (newCategoryInput.trim()) {
+                  addCategory(newCategoryInput.trim());
+                  setNewCategoryInput('');
+                }
+              }}
+              className="px-4 py-2 bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs shrink-0 cursor-pointer"
+            >
+              + Thêm Danh Mục
+            </button>
+          </div>
+
+          {/* Inline Edit Category form */}
+          {editingCategoryItem && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
+              <div className="text-xs font-bold text-amber-900">
+                Đổi tên danh mục: <span className="font-semibold">{editingCategoryItem.oldName}</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={editingCategoryItem.newName}
+                  onChange={(e) =>
+                    setEditingCategoryItem({ ...editingCategoryItem, newName: e.target.value })
+                  }
+                  className="flex-1 px-3 py-1.5 text-xs bg-white border border-amber-300 rounded-lg font-bold outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const clean = editingCategoryItem.newName.trim();
+                    if (clean && clean !== editingCategoryItem.oldName) {
+                      updateCategory(editingCategoryItem.oldName, clean);
+                    }
+                    setEditingCategoryItem(null);
+                  }}
+                  className="px-3 py-1.5 bg-amber-700 text-white font-bold text-xs rounded-lg hover:bg-amber-800 cursor-pointer"
+                >
+                  Lưu
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingCategoryItem(null)}
+                  className="px-3 py-1.5 bg-slate-200 text-slate-700 font-bold text-xs rounded-lg hover:bg-slate-300 cursor-pointer"
+                >
+                  Hủy
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* List of categories */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+            {categories.map((c) => (
+              <div
+                key={c}
+                className="flex items-center justify-between p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs hover:border-indigo-300 transition-colors"
+              >
+                <span className="font-bold text-slate-900">{c}</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setEditingCategoryItem({ oldName: c, newName: c })}
+                    className="p-1 text-slate-400 hover:text-indigo-800 rounded cursor-pointer"
+                    title="Đổi tên danh mục này"
+                  >
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`Xóa danh mục "${c}"?`)) {
+                        deleteCategory(c);
+                      }
+                    }}
+                    className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                    title="Xóa danh mục này"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
