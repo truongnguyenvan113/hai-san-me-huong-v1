@@ -353,8 +353,8 @@ export const CreateOrderModal: React.FC = () => {
                   >
                     {products
                       .filter((p) => p.status === 'ACTIVE')
-                      .map((p) => (
-                        <option key={p.product_id} value={p.product_id}>
+                      .map((p, idx) => (
+                        <option key={`${p.product_id || 'prod'}-${idx}`} value={p.product_id}>
                           {p.product_name} ({p.unit}) - {p.default_price.toLocaleString()}đ
                         </option>
                       ))}

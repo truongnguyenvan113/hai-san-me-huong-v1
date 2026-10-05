@@ -478,12 +478,12 @@ export const ProductsView: React.FC = () => {
             </div>
           </div>
         ) : (
-          filteredProducts.map((prod) => {
+          filteredProducts.map((prod, idx) => {
             const isActive = prod.status === 'ACTIVE';
 
             return (
               <div
-                key={prod.product_id}
+                key={`${prod.product_id || 'prod'}-${idx}`}
                 id={`product-card-${prod.product_id}`}
                 className={`bg-white rounded-2xl border p-5 shadow-xs transition-all flex flex-col justify-between ${
                   isActive ? 'border-slate-200 hover:border-slate-300' : 'border-slate-200 opacity-60 bg-slate-50'

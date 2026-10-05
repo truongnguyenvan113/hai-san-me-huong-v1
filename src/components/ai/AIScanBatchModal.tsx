@@ -1205,8 +1205,8 @@ export const AIScanBatchModal: React.FC<AIScanBatchModalProps> = ({ isOpen, onCl
 
       {/* Datalists for quick suggestions */}
       <datalist id="scan-catalog-products">
-        {products.map((p) => (
-          <option key={p.product_id} value={p.product_name}>
+        {products.map((p, idx) => (
+          <option key={`${p.product_id || 'prod'}-${idx}`} value={p.product_name}>
             {p.product_name} ({p.unit}) - {p.default_price.toLocaleString()}đ
           </option>
         ))}

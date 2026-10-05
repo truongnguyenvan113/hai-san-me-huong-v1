@@ -473,7 +473,7 @@ export const BatchDetailView: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {itemSummary.map((item, idx) => (
-                  <tr key={item.product_id} className="hover:bg-slate-50">
+                  <tr key={`${item.product_id || 'item'}-${idx}`} className="hover:bg-slate-50">
                     <td className="py-3 px-3 text-center font-bold text-slate-400">{idx + 1}</td>
                     <td className="py-3 px-3">
                       <div className="font-black text-slate-900 text-sm">{item.product_name}</div>
@@ -553,7 +553,7 @@ export const BatchDetailView: React.FC = () => {
                   const diff = currentActual - item.estimated_price;
 
                   return (
-                    <tr key={item.product_id} className="hover:bg-slate-50">
+                    <tr key={`${item.product_id || 'item'}-${idx}`} className="hover:bg-slate-50">
                       <td className="py-3 px-3 text-center font-bold text-slate-400">{idx + 1}</td>
                       <td className="py-3 px-3 font-black text-slate-900">
                         {item.product_name}

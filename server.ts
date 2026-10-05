@@ -324,6 +324,101 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+  // API Route: Google Proxy (Sheets & Drive) to prevent browser CORS and iframe sandbox network errors
+  app.all('/api/google-proxy/sheets*', async (req, res) => {
+    try {
+      const authHeader = req.header('Authorization') || req.header('authorization');
+      if (!authHeader) {
+        return res.status(401).json({ error: { message: 'Thiếu header Authorization' } });
+      }
+
+      const prefix = '/api/google-proxy/sheets';
+      const rawUrl = req.originalUrl || req.url;
+      const pathAndQuery = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) : '';
+      const targetUrl = `https://sheets.googleapis.com/v4/spreadsheets${pathAndQuery}`;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: authHeader,
+      };
+
+      const fetchOptions: RequestInit = {
+        method: req.method,
+        headers,
+      };
+
+      if (req.method !== 'GET' && req.method !== 'HEAD' && req.body && Object.keys(req.body).length > 0) {
+        fetchOptions.body = JSON.stringify(req.body);
+      }
+
+      const googleRes = await fetch(targetUrl, fetchOptions);
+      const contentType = googleRes.headers.get('content-type') || '';
+
+      if (contentType.includes('application/json')) {
+        const data = await googleRes.json().catch(() => ({}));
+        return res.status(googleRes.status).json(data);
+      } else {
+        const text = await googleRes.text().catch(() => '');
+        return res.status(googleRes.status).send(text);
+      }
+    } catch (err: any) {
+      console.error('[Google Proxy Sheets] Lỗi chuyển tiếp yêu cầu:', err);
+      return res.status(502).json({
+        error: {
+          code: 502,
+          message: `Lỗi kết nối máy chủ Google Sheets: ${err?.message || 'Proxy error'}`,
+        },
+      });
+    }
+  });
+
+  app.all('/api/google-proxy/drive*', async (req, res) => {
+    try {
+      const authHeader = req.header('Authorization') || req.header('authorization');
+      if (!authHeader) {
+        return res.status(401).json({ error: { message: 'Thiếu header Authorization' } });
+      }
+
+      const prefix = '/api/google-proxy/drive';
+      const rawUrl = req.originalUrl || req.url;
+      const pathAndQuery = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) : '';
+      const targetUrl = `https://www.googleapis.com/drive/v3${pathAndQuery}`;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: authHeader,
+      };
+
+      const fetchOptions: RequestInit = {
+        method: req.method,
+        headers,
+      };
+
+      if (req.method !== 'GET' && req.method !== 'HEAD' && req.body && Object.keys(req.body).length > 0) {
+        fetchOptions.body = JSON.stringify(req.body);
+      }
+
+      const googleRes = await fetch(targetUrl, fetchOptions);
+      const contentType = googleRes.headers.get('content-type') || '';
+
+      if (contentType.includes('application/json')) {
+        const data = await googleRes.json().catch(() => ({}));
+        return res.status(googleRes.status).json(data);
+      } else {
+        const text = await googleRes.text().catch(() => '');
+        return res.status(googleRes.status).send(text);
+      }
+    } catch (err: any) {
+      console.error('[Google Proxy Drive] Lỗi chuyển tiếp yêu cầu:', err);
+      return res.status(502).json({
+        error: {
+          code: 502,
+          message: `Lỗi kết nối máy chủ Google Drive: ${err?.message || 'Proxy error'}`,
+        },
+      });
+    }
+  });
+
   // API Route: Smart Seafood Batch & Orders AI Extractor
   app.post('/api/ai/parse-orders', async (req, res) => {
     try {

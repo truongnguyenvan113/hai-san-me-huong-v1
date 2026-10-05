@@ -40,9 +40,14 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}): Prom
     throw new Error('Chưa đăng nhập Google hoặc phiên đăng nhập đã hết hạn. Vui lòng nhấn "Đăng nhập Google" để tiếp tục.');
   }
 
+  // Use same-origin proxy to eliminate browser CORS and iframe sandbox restrictions
+  const proxyUrl = `/api/google-proxy/sheets${endpoint}`;
+  const directUrl = `https://sheets.googleapis.com/v4/spreadsheets${endpoint}`;
+
   let res: Response;
   try {
-    res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets${endpoint}`, {
+    // 1. Primary: Use same-origin server proxy (100% reliable inside browser iFrame)
+    res = await fetch(proxyUrl, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -50,11 +55,24 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}): Prom
         ...options.headers,
       },
     });
-  } catch (networkError: any) {
-    console.error('Network error during Google Sheets API call:', networkError);
-    throw new Error(
-      'Không thể kết nối đến Google Sheets (Lỗi mạng hoặc bị chặn kết nối). Vui lòng kiểm tra đường truyền hoặc thử đăng nhập lại Google.'
-    );
+  } catch (proxyError: any) {
+    console.warn('[Google Sheets] Proxy call failed, attempting direct fetch:', proxyError?.message);
+    try {
+      // 2. Fallback: Try direct call if proxy route fails to respond
+      res = await fetch(directUrl, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...options.headers,
+        },
+      });
+    } catch (networkError: any) {
+      console.error('Network error during Google Sheets API call:', networkError);
+      throw new Error(
+        'Không thể kết nối đến Google Sheets (Lỗi mạng hoặc bị chặn kết nối). Vui lòng kiểm tra đường truyền hoặc thử đăng nhập lại Google.'
+      );
+    }
   }
 
   if (!res.ok) {
@@ -89,13 +107,24 @@ export async function searchSpreadsheetsOnDrive(
 
   try {
     const q = `mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains '${searchQuery.replace(/'/g, "\\'")}'`;
-    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,webViewLink)&orderBy=modifiedTime desc&pageSize=10`;
+    const queryString = `q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,webViewLink)&orderBy=modifiedTime desc&pageSize=10`;
+    const proxyUrl = `/api/google-proxy/drive/files?${queryString}`;
+    const directUrl = `https://www.googleapis.com/drive/v3/files?${queryString}`;
     
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(proxyUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    } catch {
+      res = await fetch(directUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    }
 
     if (!res.ok) {
       console.warn('Drive API list files status:', res.status);
@@ -1305,6 +1334,7 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     const colDesc = findColIndex(pHeaders, ['mô tả', 'ghi chú'], 8);
 
     const seenProductNames = new Set<string>();
+    const seenProductIds = new Set<string>();
 
     for (let i = 1; i < productsRows.length; i++) {
       const r = productsRows[i];
@@ -1323,8 +1353,14 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
       }
 
       const effectiveSku = sku || `SKU-${String(i).padStart(3, '0')}`;
+      let uniqueProdId = `PROD-${effectiveSku}`;
+      if (seenProductIds.has(uniqueProdId)) {
+        uniqueProdId = `${uniqueProdId}-${i}`;
+      }
+      seenProductIds.add(uniqueProdId);
+
       restoredProducts.push({
-        product_id: `PROD-${effectiveSku}`,
+        product_id: uniqueProdId,
         sku: effectiveSku,
         product_name: pName || 'Hải Sản Tươi',
         category: r[colCategory] ? String(r[colCategory]).trim() : 'Hải sản',

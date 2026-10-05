@@ -46,11 +46,9 @@ export const initAuth = (
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (!cachedAccessToken && typeof window !== 'undefined') {
-        cachedAccessToken = localStorage.getItem(TOKEN_KEY);
-      }
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+      const validToken = await getAccessToken();
+      if (validToken) {
+        if (onAuthSuccess) onAuthSuccess(user, validToken);
       } else {
         if (onAuthFailure) onAuthFailure();
       }
@@ -126,8 +124,28 @@ export const refreshGoogleSession = async (): Promise<{ user: User; accessToken:
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  if (!cachedAccessToken && typeof window !== 'undefined') {
-    cachedAccessToken = localStorage.getItem(TOKEN_KEY);
+  if (typeof window !== 'undefined') {
+    const savedAtStr = localStorage.getItem(TOKEN_SAVED_AT_KEY);
+    if (savedAtStr) {
+      const savedAt = parseInt(savedAtStr, 10);
+      // Google access tokens expire after 60 minutes. Check if older than 55 minutes:
+      if (!isNaN(savedAt) && Date.now() - savedAt > 55 * 60 * 1000) {
+        cachedAccessToken = null;
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(TOKEN_SAVED_AT_KEY);
+        return null;
+      }
+    }
+
+    if (!cachedAccessToken) {
+      const stored = localStorage.getItem(TOKEN_KEY);
+      if (stored && stored !== 'null' && stored !== 'undefined' && stored.trim()) {
+        cachedAccessToken = stored;
+      } else {
+        cachedAccessToken = null;
+        localStorage.removeItem(TOKEN_KEY);
+      }
+    }
   }
   return cachedAccessToken;
 };

@@ -288,7 +288,20 @@ export function deduplicateProductsList(products: Product[]): Product[] {
       });
     }
   }
-  return Array.from(map.values());
+
+  // Ensure every product in the list has a strictly unique product_id
+  const seenIds = new Set<string>();
+  return Array.from(map.values()).map((p, idx) => {
+    let pid = (p.product_id || '').trim();
+    if (!pid || seenIds.has(pid)) {
+      pid = pid ? `${pid}-${idx + 1}` : `PROD-${Date.now()}-${idx + 1}`;
+    }
+    seenIds.add(pid);
+    return {
+      ...p,
+      product_id: pid,
+    };
+  });
 }
 
 class StorageService {
@@ -330,10 +343,11 @@ class StorageService {
     if (!localStorage.getItem(STORAGE_KEYS.PRODUCTS)) {
       this.set(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     } else {
-      // Deduplicate existing products on init
+      // Deduplicate existing products on init and ensure unique product_ids
       const savedProds = this.get<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
       const dedupedProds = deduplicateProductsList(savedProds);
-      if (dedupedProds.length !== savedProds.length) {
+      const hasChanges = dedupedProds.length !== savedProds.length || dedupedProds.some((p, i) => p.product_id !== savedProds[i]?.product_id);
+      if (hasChanges) {
         this.set(STORAGE_KEYS.PRODUCTS, dedupedProds);
       }
     }
@@ -440,7 +454,8 @@ class StorageService {
   public getProducts(): Product[] {
     const raw = this.get<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     const deduped = deduplicateProductsList(raw);
-    if (deduped.length !== raw.length) {
+    const needsUpdate = deduped.length !== raw.length || deduped.some((p, i) => p.product_id !== raw[i]?.product_id);
+    if (needsUpdate) {
       this.set(STORAGE_KEYS.PRODUCTS, deduped);
     }
     return deduped;

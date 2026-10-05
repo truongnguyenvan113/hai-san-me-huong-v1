@@ -4,5 +4,6 @@ dist/
 coverage/
 .DS_Store
 *.log
+.telegram_idempotency.json
 .env*
 !.env.example
