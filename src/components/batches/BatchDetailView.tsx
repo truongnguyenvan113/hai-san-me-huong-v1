@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { Batch, BatchStatus, Order, OrderItem } from '../../types';
 import { BATCH_STATUS_CONFIG, formatCurrency, formatDate, formatQuantity } from '../../utils/formatters';
 import { ConfirmModal } from '../common/ConfirmModal';
+import { EditBatchModal } from './EditBatchModal';
 import {
   ArrowLeft,
   Calendar,
@@ -28,6 +29,7 @@ import {
   AlertCircle,
   Scissors,
   Trash2,
+  Edit3,
 } from 'lucide-react';
 
 const BATCH_STAGES: BatchStatus[] = [
@@ -70,6 +72,7 @@ export const BatchDetailView: React.FC = () => {
   const [actualPrices, setActualPrices] = useState<Record<string, number>>({});
   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
   const [isDeleteBatchModalOpen, setIsDeleteBatchModalOpen] = useState(false);
+  const [isEditBatchModalOpen, setIsEditBatchModalOpen] = useState(false);
 
   // Order cancellation state
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
@@ -223,11 +226,31 @@ export const BatchDetailView: React.FC = () => {
                 {BATCH_STATUS_CONFIG[batch.status].label}
               </span>
             </div>
-            <h1 className="text-xl font-black text-slate-900 mt-1">{batch.batch_name}</h1>
+            <div className="flex items-center gap-2 mt-1">
+              <h1 className="text-xl font-black text-slate-900">{batch.batch_name}</h1>
+              <button
+                id="batch-rename-quick-btn"
+                onClick={() => setIsEditBatchModalOpen(true)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-colors cursor-pointer"
+                title="Đổi tên đợt gom hàng này"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-teal-700" />
+                <span className="hidden sm:inline">Đổi tên đợt</span>
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            id="batch-edit-modal-btn"
+            onClick={() => setIsEditBatchModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl border border-slate-200 transition-colors cursor-pointer"
+            title="Chỉnh sửa tên đợt gom và thông tin ngày giao"
+          >
+            <Edit3 className="w-4 h-4 text-teal-700" /> Sửa Đợt Gom
+          </button>
+
           <button
             id="batch-sync-sheets-btn"
             onClick={handleManualSyncSheets}
@@ -960,6 +983,13 @@ export const BatchDetailView: React.FC = () => {
         message={`Bạn có chắc chắn muốn xóa vĩnh viễn đợt "${batch.batch_name}" (${batch.batch_code})? Toàn bộ ${batchOrders.length} đơn hàng của cư dân và các giao dịch thanh toán liên quan sẽ bị xóa sạch.`}
         confirmText="Xóa vĩnh viễn đợt này"
         isDangerous={true}
+      />
+
+      {/* Edit batch modal */}
+      <EditBatchModal
+        isOpen={isEditBatchModalOpen}
+        onClose={() => setIsEditBatchModalOpen(false)}
+        batch={batch}
       />
     </div>
   );

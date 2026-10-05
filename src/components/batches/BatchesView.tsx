@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { BATCH_STATUS_CONFIG, formatCurrency, formatDate } from '../../utils/formatters';
 import { CreateBatchModal } from './CreateBatchModal';
+import { EditBatchModal } from './EditBatchModal';
 import { ConfirmModal } from '../common/ConfirmModal';
 import { Batch } from '../../types';
 import {
@@ -16,6 +17,7 @@ import {
   Send,
   Truck,
   Trash2,
+  Edit3,
 } from 'lucide-react';
 
 export const BatchesView: React.FC = () => {
@@ -32,6 +34,7 @@ export const BatchesView: React.FC = () => {
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [batchToDelete, setBatchToDelete] = useState<Batch | null>(null);
+  const [batchToEdit, setBatchToEdit] = useState<Batch | null>(null);
 
   const handleSelectBatch = (batchId: string) => {
     setSelectedBatchId(batchId);
@@ -151,7 +154,18 @@ export const BatchesView: React.FC = () => {
                         </span>
                       )}
                     </div>
-                    <h3 className="text-lg font-black text-slate-900 mt-1.5">{batch.batch_name}</h3>
+                    <div
+                      className="flex items-center gap-2 group cursor-pointer mt-1.5"
+                      onClick={() => setBatchToEdit(batch)}
+                      title="Bấm để đổi tên đợt gom hoặc sửa thông tin"
+                    >
+                      <h3 className="text-lg font-black text-slate-900 group-hover:text-teal-800 transition-colors">
+                        {batch.batch_name}
+                      </h3>
+                      <span className="p-1 text-slate-400 group-hover:text-teal-800 group-hover:bg-teal-50 rounded-lg transition-colors">
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </span>
+                    </div>
                   </div>
 
                   <span
@@ -218,6 +232,20 @@ export const BatchesView: React.FC = () => {
                     <span className="text-slate-300">•</span>
 
                     <button
+                      id={`edit-batch-btn-${batch.batch_id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setBatchToEdit(batch);
+                      }}
+                      className="text-xs font-semibold text-teal-800 hover:text-teal-900 flex items-center gap-1 transition-colors hover:underline"
+                      title="Chỉnh sửa tên đợt gom và thông tin"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" /> Đổi tên / Sửa
+                    </button>
+
+                    <span className="text-slate-300">•</span>
+
+                    <button
                       id={`delete-batch-btn-${batch.batch_id}`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -245,6 +273,13 @@ export const BatchesView: React.FC = () => {
       )}
 
       <CreateBatchModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} />
+
+      {/* Edit batch modal */}
+      <EditBatchModal
+        isOpen={Boolean(batchToEdit)}
+        onClose={() => setBatchToEdit(null)}
+        batch={batchToEdit}
+      />
 
       {/* Confirmation modal for deleting batch */}
       <ConfirmModal

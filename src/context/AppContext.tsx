@@ -605,37 +605,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const currentOrders = storage.getOrders();
       let hasOrderChanges = false;
 
-      const updatedOrders = currentOrders.map((o) => {
-        if (o.batch_id === batch.batch_id && o.status !== 'CANCELLED') {
-          let newOrderStatus: Order['status'] = o.status;
-          let newDeliveryStatus: Order['delivery_status'] = o.delivery_status;
-
-          if (batch.status === 'COLLECTING' || batch.status === 'OPEN') {
-            newOrderStatus = 'COLLECTING';
-          } else if (batch.status === 'CONFIRMED') {
-            newOrderStatus = 'CONFIRMED';
-          } else if (batch.status === 'ORDERED') {
-            newOrderStatus = 'ORDERED';
-          } else if (batch.status === 'RECEIVED') {
-            newOrderStatus = 'RECEIVED';
-          } else if (batch.status === 'DISTRIBUTING') {
-            newOrderStatus = o.is_packed ? 'PACKED' : 'RECEIVED';
-          } else if (batch.status === 'DELIVERING') {
-            newOrderStatus = 'DELIVERING';
-            newDeliveryStatus = 'DELIVERING';
-          } else if (batch.status === 'COMPLETED') {
-            newOrderStatus = 'DELIVERED';
-            newDeliveryStatus = 'DELIVERED';
+      const updatedOrders = currentOrders.map((origOrder) => {
+        let o = { ...origOrder };
+        if (o.batch_id === batch.batch_id) {
+          // Synchronize batch name and delivery date to orders
+          if (o.batch_name !== batch.batch_name || o.delivery_date !== batch.delivery_date) {
+            hasOrderChanges = true;
+            o.batch_name = batch.batch_name;
+            o.delivery_date = batch.delivery_date;
+            o.updated_at = new Date().toISOString();
           }
 
-          if (newOrderStatus !== o.status || newDeliveryStatus !== o.delivery_status) {
-            hasOrderChanges = true;
-            return {
-              ...o,
-              status: newOrderStatus,
-              delivery_status: newDeliveryStatus,
-              updated_at: new Date().toISOString(),
-            };
+          if (o.status !== 'CANCELLED') {
+            let newOrderStatus: Order['status'] = o.status;
+            let newDeliveryStatus: Order['delivery_status'] = o.delivery_status;
+
+            if (batch.status === 'COLLECTING' || batch.status === 'OPEN') {
+              newOrderStatus = 'COLLECTING';
+            } else if (batch.status === 'CONFIRMED') {
+              newOrderStatus = 'CONFIRMED';
+            } else if (batch.status === 'ORDERED') {
+              newOrderStatus = 'ORDERED';
+            } else if (batch.status === 'RECEIVED') {
+              newOrderStatus = 'RECEIVED';
+            } else if (batch.status === 'DISTRIBUTING') {
+              newOrderStatus = o.is_packed ? 'PACKED' : 'RECEIVED';
+            } else if (batch.status === 'DELIVERING') {
+              newOrderStatus = 'DELIVERING';
+              newDeliveryStatus = 'DELIVERING';
+            } else if (batch.status === 'COMPLETED') {
+              newOrderStatus = 'DELIVERED';
+              newDeliveryStatus = 'DELIVERED';
+            }
+
+            if (newOrderStatus !== o.status || newDeliveryStatus !== o.delivery_status) {
+              hasOrderChanges = true;
+              o.status = newOrderStatus;
+              o.delivery_status = newDeliveryStatus;
+              o.updated_at = new Date().toISOString();
+            }
           }
         }
         return o;
