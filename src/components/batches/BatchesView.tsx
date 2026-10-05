@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { BATCH_STATUS_CONFIG, formatCurrency, formatDate } from '../../utils/formatters';
 import { CreateBatchModal } from './CreateBatchModal';
+import { ConfirmModal } from '../common/ConfirmModal';
+import { Batch } from '../../types';
 import {
   Package,
   Plus,
@@ -12,7 +14,8 @@ import {
   CheckCircle2,
   Clock,
   Send,
-  Truck
+  Truck,
+  Trash2,
 } from 'lucide-react';
 
 export const BatchesView: React.FC = () => {
@@ -24,9 +27,11 @@ export const BatchesView: React.FC = () => {
     setCurrentBatch,
     currentBatch,
     setIsAIScanOpen,
+    deleteBatch,
   } = useApp();
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [batchToDelete, setBatchToDelete] = useState<Batch | null>(null);
 
   const handleSelectBatch = (batchId: string) => {
     setSelectedBatchId(batchId);
@@ -197,17 +202,33 @@ export const BatchesView: React.FC = () => {
 
                 {/* Footer Actions */}
                 <div className="flex items-center justify-between gap-2 mt-5 pt-3 border-t border-slate-100">
-                  {!isCurrent ? (
+                  <div className="flex items-center gap-2">
+                    {!isCurrent ? (
+                      <button
+                        id={`set-current-batch-btn-${batch.batch_id}`}
+                        onClick={() => setCurrentBatch(batch.batch_id)}
+                        className="text-xs font-semibold text-slate-600 hover:text-teal-800 transition-colors"
+                      >
+                        Đặt làm đợt hiện tại
+                      </button>
+                    ) : (
+                      <span className="text-xs text-teal-800 font-medium">Đợt mặc định</span>
+                    )}
+
+                    <span className="text-slate-300">•</span>
+
                     <button
-                      id={`set-current-batch-btn-${batch.batch_id}`}
-                      onClick={() => setCurrentBatch(batch.batch_id)}
-                      className="text-xs font-semibold text-slate-600 hover:text-teal-800 transition-colors"
+                      id={`delete-batch-btn-${batch.batch_id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setBatchToDelete(batch);
+                      }}
+                      className="text-xs font-semibold text-rose-600 hover:text-rose-800 flex items-center gap-1 transition-colors hover:underline"
+                      title="Xóa đợt gom và các đơn hàng liên quan"
                     >
-                      Đặt làm đợt hiện tại
+                      <Trash2 className="w-3.5 h-3.5" /> Xóa đợt
                     </button>
-                  ) : (
-                    <span className="text-xs text-teal-800 font-medium">Đợt mặc định</span>
-                  )}
+                  </div>
 
                   <button
                     id={`open-batch-detail-btn-${batch.batch_id}`}
@@ -224,6 +245,24 @@ export const BatchesView: React.FC = () => {
       )}
 
       <CreateBatchModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} />
+
+      {/* Confirmation modal for deleting batch */}
+      <ConfirmModal
+        isOpen={Boolean(batchToDelete)}
+        onClose={() => setBatchToDelete(null)}
+        onConfirm={() => {
+          if (batchToDelete) {
+            deleteBatch(batchToDelete.batch_id);
+            setBatchToDelete(null);
+          }
+        }}
+        title="Xác nhận xóa đợt gom hàng"
+        message={`Bạn có chắc chắn muốn xóa đợt "${batchToDelete?.batch_name}" (${batchToDelete?.batch_code})? Thao tác này sẽ xóa vĩnh viễn đợt gom này cùng toàn bộ ${
+          batchToDelete ? orders.filter((o) => o.batch_id === batchToDelete.batch_id).length : 0
+        } đơn hàng của cư dân và các giao dịch thanh toán liên quan.`}
+        confirmText="Xóa vĩnh viễn đợt này"
+        isDangerous={true}
+      />
     </div>
   );
 };

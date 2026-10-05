@@ -26,7 +26,8 @@ import {
   Truck,
   User,
   AlertCircle,
-  Scissors
+  Scissors,
+  Trash2,
 } from 'lucide-react';
 
 const BATCH_STAGES: BatchStatus[] = [
@@ -58,6 +59,7 @@ export const BatchDetailView: React.FC = () => {
     syncStatus,
     spreadsheetId,
     addToast,
+    deleteBatch,
   } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<'summary' | 'actual_price' | 'actual_weight' | 'orders' | 'print'>(
@@ -67,6 +69,7 @@ export const BatchDetailView: React.FC = () => {
   // Price adjustment state
   const [actualPrices, setActualPrices] = useState<Record<string, number>>({});
   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
+  const [isDeleteBatchModalOpen, setIsDeleteBatchModalOpen] = useState(false);
 
   // Order cancellation state
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
@@ -256,6 +259,15 @@ export const BatchDetailView: React.FC = () => {
             className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
           >
             <Printer className="w-4 h-4 text-teal-400" /> In Tất Cả Phiếu A4 ({batchOrders.length})
+          </button>
+
+          <button
+            id="batch-delete-btn"
+            onClick={() => setIsDeleteBatchModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 text-xs font-bold rounded-xl border border-rose-200 transition-colors cursor-pointer"
+            title="Xóa vĩnh viễn đợt gom này và toàn bộ đơn hàng liên quan"
+          >
+            <Trash2 className="w-4 h-4" /> Xóa Đợt Này
           </button>
         </div>
       </div>
@@ -932,6 +944,21 @@ export const BatchDetailView: React.FC = () => {
         }}
         title="Cảnh báo hủy đơn hàng"
         message="Đơn hàng này có thể đã được tổng hợp để gửi đặt ở quê. Bạn có chắc chắn muốn hủy đơn không?"
+        isDangerous={true}
+      />
+
+      {/* Confirmation Modal for deleting current batch */}
+      <ConfirmModal
+        isOpen={isDeleteBatchModalOpen}
+        onClose={() => setIsDeleteBatchModalOpen(false)}
+        onConfirm={() => {
+          deleteBatch(batch.batch_id);
+          setIsDeleteBatchModalOpen(false);
+          setActiveTab('BATCHES');
+        }}
+        title="Xác nhận xóa đợt gom hàng"
+        message={`Bạn có chắc chắn muốn xóa vĩnh viễn đợt "${batch.batch_name}" (${batch.batch_code})? Toàn bộ ${batchOrders.length} đơn hàng của cư dân và các giao dịch thanh toán liên quan sẽ bị xóa sạch.`}
+        confirmText="Xóa vĩnh viễn đợt này"
         isDangerous={true}
       />
     </div>

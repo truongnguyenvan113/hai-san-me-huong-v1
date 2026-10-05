@@ -156,6 +156,7 @@ interface AppContextType {
   updateCustomer: (c: Customer) => void;
   addBatch: (b: Batch) => void;
   updateBatch: (b: Batch, cascadeToOrders?: boolean) => void;
+  deleteBatch: (batchId: string) => boolean;
   advanceBatchStage: (batchId: string, newStatus: BatchStatus, cascadeToOrders?: boolean) => Promise<boolean>;
   setCurrentBatch: (batchId: string) => void;
   addOrder: (o: Order) => void;
@@ -673,6 +674,36 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     addToast('info', 'Chuyển đợt hàng', `Đã chọn đợt ${batchId}`);
   };
 
+  const deleteBatch = (batchId: string): boolean => {
+    const res = storage.deleteBatch(batchId);
+    if (!res.success) return false;
+
+    const remainingBatches = storage.getBatches();
+    setBatches(remainingBatches);
+    setOrders(storage.getOrders());
+    setPayments(storage.getPayments());
+
+    if (selectedBatchId === batchId) {
+      const nextBatchId = remainingBatches.length > 0 ? remainingBatches[0].batch_id : null;
+      setSelectedBatchId(nextBatchId);
+    }
+
+    addToast(
+      'info',
+      'Đã xóa đợt gom hàng',
+      `Đã xóa đợt "${res.batchName}" và ${res.deletedOrdersCount} đơn hàng liên quan.`
+    );
+
+    // Trigger sync to Google Sheets if configured
+    if (spreadsheetId) {
+      setTimeout(() => {
+        executeAutoSync();
+      }, 500);
+    }
+
+    return true;
+  };
+
   const addOrder = (order: Order) => {
     storage.addOrder(order);
     setOrders(storage.getOrders());
@@ -890,6 +921,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateCustomer,
         addBatch,
         updateBatch,
+        deleteBatch,
         advanceBatchStage,
         setCurrentBatch,
         addOrder,

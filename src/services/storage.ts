@@ -746,6 +746,54 @@ class StorageService {
     }
   }
 
+  public deleteBatch(batchId: string): { success: boolean; deletedOrdersCount: number; batchName: string } {
+    const batches = this.getBatches();
+    const batchToDelete = batches.find((b) => b.batch_id === batchId);
+    if (!batchToDelete) {
+      return { success: false, deletedOrdersCount: 0, batchName: '' };
+    }
+
+    const batchName = batchToDelete.batch_name;
+
+    // 1. Remove the batch
+    const updatedBatches = batches.filter((b) => b.batch_id !== batchId);
+    this.saveBatches(updatedBatches);
+
+    // 2. Remove all orders belonging to this batch
+    const allOrders = this.getOrders();
+    const remainingOrders = allOrders.filter((o) => o.batch_id !== batchId);
+    const deletedOrdersCount = allOrders.length - remainingOrders.length;
+    this.saveOrders(remainingOrders);
+
+    // 3. Remove payment transactions associated with deleted orders
+    const deletedOrderIds = new Set(allOrders.filter((o) => o.batch_id === batchId).map((o) => o.order_id));
+    const allPayments = this.getPayments();
+    const remainingPayments = allPayments.filter((p) => !deletedOrderIds.has(p.order_id));
+    if (remainingPayments.length !== allPayments.length) {
+      this.set(STORAGE_KEYS.PAYMENTS, remainingPayments);
+    }
+
+    // 4. Update current batch id if it was pointing to this batch
+    const curBatchId = this.getCurrentBatchId();
+    if (curBatchId === batchId) {
+      const nextBatchId = updatedBatches.length > 0 ? updatedBatches[0].batch_id : null;
+      if (nextBatchId) {
+        this.setCurrentBatchId(nextBatchId);
+      } else {
+        this.set(STORAGE_KEYS.CURRENT_BATCH_ID, null);
+      }
+    }
+
+    this.logAudit(
+      'DELETE_BATCH',
+      'BATCH',
+      batchId,
+      `Xóa đợt hàng: ${batchName} và ${deletedOrdersCount} đơn hàng liên quan`
+    );
+
+    return { success: true, deletedOrdersCount, batchName };
+  }
+
   // Orders
   public getOrders(): Order[] {
     return this.get<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
