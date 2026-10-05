@@ -705,8 +705,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Trigger sync to Google Sheets if configured
     if (spreadsheetId) {
       setTimeout(() => {
-        executeAutoSync();
-      }, 500);
+        executeAutoSync(true);
+      }, 300);
     }
 
     return true;

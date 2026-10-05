@@ -180,10 +180,12 @@ export async function createSeafoodSpreadsheet(
 // 2. Ensure all 7 required sheet tabs exist in an existing spreadsheet
 export async function ensureSheetTabsExist(spreadsheetId: string) {
   const meta = await fetchSheetsApi(`/${spreadsheetId}`);
-  const existingTitles = (meta.sheets || []).map((s: any) => s.properties?.title);
+  const existingTitles: string[] = (meta.sheets || []).map((s: any) =>
+    String(s.properties?.title || '').trim().toLowerCase()
+  );
 
   const missingSheets = Object.values(SHEET_NAMES).filter(
-    (name) => !existingTitles.includes(name)
+    (name) => !existingTitles.includes(name.trim().toLowerCase())
   );
 
   if (missingSheets.length > 0) {
@@ -617,22 +619,45 @@ export async function syncAllToGoogleSheets(
 
   const preparedData = prepareSheetData(orders, batches, customers, products, settings);
 
-  // Clear and update all 7 sheets
+  // 1. Clear old data from all tabs safely with single quotes
+  const clearRanges = Object.keys(preparedData).map((title) => `'${title.replace(/'/g, "''")}'`);
+  try {
+    await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
+      method: 'POST',
+      body: JSON.stringify({ ranges: clearRanges }),
+    });
+  } catch (clearErr: any) {
+    console.warn('[Google Sheets] batchClear by tab name warning, attempting fallback range clear:', clearErr?.message);
+    try {
+      const fallbackClearRanges = Object.keys(preparedData).map(
+        (title) => `'${title.replace(/'/g, "''")}'!A1:Z2000`
+      );
+      await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
+        method: 'POST',
+        body: JSON.stringify({ ranges: fallbackClearRanges }),
+      });
+    } catch {
+      // Proceed to update values directly
+    }
+  }
+
+  // 2. Write new formatted data starting at cell A1 for each sheet tab
+  // Using 'Sheet'!A1 dynamically sizes to exactly match the data array without dimension mismatch errors
   const valueRanges = Object.entries(preparedData).map(([sheetTitle, { header, rows }]) => {
+    const sanitizedRows = rows.map((row) =>
+      row.map((cell) => {
+        if (cell === null || cell === undefined) return '';
+        if (typeof cell === 'number') return isNaN(cell) ? 0 : cell;
+        return cell;
+      })
+    );
+
     return {
-      range: `${sheetTitle}!A1:Z${Math.max(rows.length + 10, 50)}`,
-      values: [header, ...rows],
+      range: `'${sheetTitle.replace(/'/g, "''")}'!A1`,
+      values: [header, ...sanitizedRows],
     };
   });
 
-  // 1. Clear old data from all tabs
-  const clearRanges = Object.keys(preparedData).map((title) => `${title}!A1:Z500`);
-  await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
-    method: 'POST',
-    body: JSON.stringify({ ranges: clearRanges }),
-  });
-
-  // 2. Write new formatted data
   await fetchSheetsApi(`/${spreadsheetId}/values:batchUpdate`, {
     method: 'POST',
     body: JSON.stringify({
@@ -1413,19 +1438,23 @@ export async function exportSettingsToGoogleSheets(
   const settingsData = prepared[SHEET_NAMES.SETTINGS];
 
   // 1. Clear old data from settings tab
-  await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
-    method: 'POST',
-    body: JSON.stringify({ ranges: [`${SHEET_NAMES.SETTINGS}!A1:Z100`] }),
-  });
+  try {
+    await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
+      method: 'POST',
+      body: JSON.stringify({ ranges: [`'${SHEET_NAMES.SETTINGS}'`] }),
+    });
+  } catch (err: any) {
+    console.warn('Clear settings sheet warning:', err?.message);
+  }
 
-  // 2. Write new formatted settings data
+  // 2. Write new formatted settings data starting at A1
   await fetchSheetsApi(`/${spreadsheetId}/values:batchUpdate`, {
     method: 'POST',
     body: JSON.stringify({
       valueInputOption: 'USER_ENTERED',
       data: [
         {
-          range: `${SHEET_NAMES.SETTINGS}!A1:C${settingsData.rows.length + 1}`,
+          range: `'${SHEET_NAMES.SETTINGS}'!A1`,
           values: [settingsData.header, ...settingsData.rows],
         },
       ],
