@@ -5,6 +5,10 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { ruleBasedPriceListParser } from './src/utils/priceListParser';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 dotenv.config();
 
@@ -415,6 +419,76 @@ async function startServer() {
           code: 502,
           message: `Lỗi kết nối máy chủ Google Drive: ${err?.message || 'Proxy error'}`,
         },
+      });
+    }
+  });
+
+  // API Route: Git status, Push, and Pull integration
+  app.get('/api/git/status', async (_req, res) => {
+    try {
+      const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD');
+      const { stdout: lastCommit } = await execAsync('git log -1 --pretty=format:"%h - %s (%cr)"');
+      const { stdout: status } = await execAsync('git status --porcelain');
+      return res.json({
+        success: true,
+        branch: branch.trim(),
+        lastCommit: lastCommit.trim(),
+        isClean: status.trim().length === 0,
+        repo: 'truongnguyenvan113/hai-san-me-huong-v1',
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/git/push', async (req, res) => {
+    try {
+      const { message } = req.body || {};
+      const commitMsg = message?.trim() || `update: đồng bộ thay đổi từ web app lúc ${new Date().toLocaleString('vi-VN')}`;
+
+      // Add all changes and commit if any
+      await execAsync('git add -A');
+      try {
+        await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
+      } catch {
+        // Nothing to commit is fine
+      }
+
+      // Push to origin main
+      const { stdout: pushMain } = await execAsync('git push origin main');
+      try {
+        await execAsync('git push origin main:develop');
+      } catch (devErr) {
+        console.warn('Push to develop branch notice:', devErr);
+      }
+
+      return res.json({
+        success: true,
+        message: 'Đã đẩy (push) thành công toàn bộ mã nguồn lên GitHub!',
+        output: pushMain,
+      });
+    } catch (err: any) {
+      console.error('Git push error:', err);
+      return res.status(500).json({
+        success: false,
+        error: `Không thể push lên GitHub: ${err?.message || 'Lỗi không xác định'}`,
+      });
+    }
+  });
+
+  app.post('/api/git/pull', async (_req, res) => {
+    try {
+      const { stdout } = await execAsync('git pull origin main');
+      return res.json({
+        success: true,
+        message: 'Đã kéo (pull) cập nhật mới nhất từ GitHub thành công!',
+        output: stdout,
+      });
+    } catch (err: any) {
+      console.error('Git pull error:', err);
+      return res.status(500).json({
+        success: false,
+        error: `Không thể pull từ GitHub: ${err?.message || 'Lỗi không xác định'}`,
       });
     }
   });

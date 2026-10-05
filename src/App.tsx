@@ -19,6 +19,7 @@ import { CreateBatchModal } from './components/batches/CreateBatchModal';
 import { CreateCustomerModal } from './components/customers/CreateCustomerModal';
 import { AIScanBatchModal } from './components/ai/AIScanBatchModal';
 import { GoogleSheetsSyncModal } from './components/sheets/GoogleSheetsSyncModal';
+import { GitSyncModal } from './components/github/GitSyncModal';
 import { BatchPrintModal } from './components/print/BatchPrintModal';
 import { ToastContainer } from './components/common/Toast';
 
@@ -36,6 +37,8 @@ const MainLayout: React.FC = () => {
     aiScanInitialTab,
     isSheetsSyncOpen,
     setIsSheetsSyncOpen,
+    isGitSyncOpen,
+    setIsGitSyncOpen,
     printModalConfig,
     setPrintModalConfig,
     toasts,
@@ -126,6 +129,11 @@ const MainLayout: React.FC = () => {
       <GoogleSheetsSyncModal
         isOpen={isSheetsSyncOpen}
         onClose={() => setIsSheetsSyncOpen(false)}
+      />
+
+      <GitSyncModal
+        isOpen={isGitSyncOpen}
+        onClose={() => setIsGitSyncOpen(false)}
       />
 
       <BatchPrintModal

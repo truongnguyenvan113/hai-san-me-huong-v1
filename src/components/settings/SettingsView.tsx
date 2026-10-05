@@ -33,6 +33,7 @@ import {
   Scale,
   Edit2,
   Layers,
+  GitBranch,
 } from 'lucide-react';
 import { ALL_BANKS, getBankByCodeOrName } from '../../utils/banks';
 
@@ -66,6 +67,7 @@ export const SettingsView: React.FC = () => {
     updateCategory,
     deleteCategory,
     resetCategoriesToDefault,
+    setIsGitSyncOpen,
   } = useApp();
 
   const [newUnitInput, setNewUnitInput] = useState('');
@@ -1057,6 +1059,49 @@ export const SettingsView: React.FC = () => {
                 Xóa sạch và tạo lại đợt hàng mẫu, danh sách phòng cư dân và hải sản.
               </p>
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Section 6: GitHub Source Code Sync & Backup */}
+      <div className="bg-slate-900 text-white p-6 rounded-2xl border border-slate-800 shadow-md space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-xl bg-slate-800 text-emerald-400 flex items-center justify-center">
+              <GitBranch className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-black text-base text-white">Đồng Bộ Mã Nguồn GitHub</h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Kho lưu trữ: <span className="font-mono text-emerald-400">truongnguyenvan113/hai-san-me-huong-v1</span> (nhánh main & develop)
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsGitSyncOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black rounded-xl text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
+          >
+            <GitBranch className="w-4 h-4 fill-slate-950" />
+            <span>Mở Bảng Điều Khiển Git Push</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-slate-300">
+          <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/60">
+            <div className="text-[11px] text-slate-400 mb-1">Xác thực Git</div>
+            <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5" /> Đã kết nối Token
+            </div>
+          </div>
+          <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/60">
+            <div className="text-[11px] text-slate-400 mb-1">Cơ chế đồng bộ</div>
+            <div className="font-bold text-white">Push song song main + develop</div>
+          </div>
+          <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/60">
+            <div className="text-[11px] text-slate-400 mb-1">Thao tác trực tiếp</div>
+            <div className="font-bold text-white">Push & Pull tức thời trong app</div>
           </div>
         </div>
       </div>

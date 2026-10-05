@@ -13,7 +13,8 @@ import {
   Settings,
   Scale,
   X,
-  FileSpreadsheet
+  FileSpreadsheet,
+  GitBranch,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -29,7 +30,7 @@ interface NavItem {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
-  const { activeTab, setActiveTab, orders, setIsAIScanOpen, setIsSheetsSyncOpen } = useApp();
+  const { activeTab, setActiveTab, orders, setIsAIScanOpen, setIsSheetsSyncOpen, setIsGitSyncOpen } = useApp();
 
   const pendingDeliveryCount = orders.filter(
     (o) => o.status !== 'CANCELLED' && o.delivery_status !== 'DELIVERED'
@@ -134,10 +135,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
               setIsSheetsSyncOpen(true);
               onClose();
             }}
-            className="w-full flex items-center gap-2 px-3.5 py-2.5 mb-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 border border-emerald-200"
+            className="w-full flex items-center gap-2 px-3.5 py-2.5 mb-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 border border-emerald-200"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
             <span>📊 Đồng Bộ Google Sheets</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setIsGitSyncOpen(true);
+              onClose();
+            }}
+            className="w-full flex items-center gap-2 px-3.5 py-2.5 mb-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-2xs transition-all active:scale-95 border border-slate-700"
+          >
+            <GitBranch className="w-4 h-4 text-emerald-400" />
+            <span>🐙 GitHub Sync / Push Git</span>
           </button>
 
           {NAV_ITEMS.map((item) => {

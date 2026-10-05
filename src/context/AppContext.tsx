@@ -102,6 +102,8 @@ interface AppContextType {
   openAIScanModal: (tab?: 'IMAGE' | 'TEXT' | 'PRICE_SCAN') => void;
   isSheetsSyncOpen: boolean;
   setIsSheetsSyncOpen: (open: boolean) => void;
+  isGitSyncOpen: boolean;
+  setIsGitSyncOpen: (open: boolean) => void;
   isCompareModalOpen: boolean;
   setIsCompareModalOpen: (open: boolean) => void;
   selectedCompareSnapshot: BackupSnapshot | null;
@@ -235,6 +237,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setIsAIScanOpen(true);
   };
   const [isSheetsSyncOpen, setIsSheetsSyncOpen] = useState(false);
+  const [isGitSyncOpen, setIsGitSyncOpen] = useState(false);
   const [isCompareModalOpen, setIsCompareModalOpen] = useState(false);
   const [selectedCompareSnapshot, setSelectedCompareSnapshot] = useState<BackupSnapshot | null>(null);
   const [snapshots, setSnapshots] = useState<BackupSnapshot[]>(() => storage.getSnapshots());
@@ -852,6 +855,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         openAIScanModal,
         isSheetsSyncOpen,
         setIsSheetsSyncOpen,
+        isGitSyncOpen,
+        setIsGitSyncOpen,
         isCompareModalOpen,
         setIsCompareModalOpen,
         selectedCompareSnapshot,
