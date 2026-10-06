@@ -329,6 +329,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const token = await getAccessToken();
     if (!token) {
       setSyncStatus('UNAUTHENTICATED');
+      if (isManual) {
+        addToast(
+          'warning',
+          'Chưa kết nối Google',
+          'Vui lòng nhấn "Đăng nhập Google" trên góc trên để cấp quyền đồng bộ Google Sheets.'
+        );
+      }
       return false;
     }
 
@@ -347,6 +354,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setSpreadsheetUrl(result.spreadsheetUrl);
         setLastSyncStats(result.stats);
         setSyncStatus('SYNCED');
+        if (isManual) {
+          addToast(
+            'success',
+            'Đã đồng bộ lên Google Sheets',
+            `Đã đẩy thành công: ${result.stats.batchesCount} đợt gom, ${result.stats.ordersCount} đơn hàng lên Google Sheets!`
+          );
+        }
         return true;
       }
       setSyncStatus('IDLE');
@@ -359,6 +373,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         err?.message?.includes('authentication credentials') ||
         err?.message?.includes('UNAUTHENTICATED');
       setSyncStatus(isAuthErr ? 'UNAUTHENTICATED' : 'ERROR');
+      if (isManual) {
+        addToast(
+          'error',
+          'Lỗi đồng bộ Google Sheets',
+          err?.message || 'Không thể đồng bộ dữ liệu lên Google Sheets'
+        );
+      }
       return false;
     }
   };

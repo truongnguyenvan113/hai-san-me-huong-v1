@@ -423,61 +423,222 @@ async function startServer() {
     }
   });
 
+  // Helper to ensure Git repository is safely initialized
+  const ensureGitRepo = async (): Promise<boolean> => {
+    try {
+      if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
+        await execAsync('git init -b main');
+        await execAsync('git config user.name "AI Studio"');
+        await execAsync('git config user.email "aistudio@google.com"');
+      } else {
+        try {
+          const { stdout: currentB } = await execAsync('git rev-parse --abbrev-ref HEAD');
+          if (currentB.trim() === 'master') {
+            await execAsync('git branch -m main');
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return true;
+    } catch (err: any) {
+      console.warn('[Git Init] Notice:', err?.message);
+      return false;
+    }
+  };
+
   // API Route: Git status, Push, and Pull integration
   app.get('/api/git/status', async (_req, res) => {
     try {
-      const { stdout: branch } = await execAsync('git rev-parse --abbrev-ref HEAD');
-      const { stdout: lastCommit } = await execAsync('git log -1 --pretty=format:"%h - %s (%cr)"');
-      const { stdout: status } = await execAsync('git status --porcelain');
+      await ensureGitRepo();
+      let branch = 'main';
+      try {
+        const { stdout: b } = await execAsync('git rev-parse --abbrev-ref HEAD');
+        if (b && b.trim()) branch = b.trim();
+      } catch {
+        branch = 'main';
+      }
+
+      let lastCommit = 'Bản cập nhật mới nhất';
+      try {
+        const { stdout: lc } = await execAsync('git log -1 --pretty=format:"%h - %s (%cr)"');
+        if (lc && lc.trim()) lastCommit = lc.trim();
+      } catch {
+        lastCommit = 'Khởi tạo mã nguồn';
+      }
+
+      let isClean = true;
+      try {
+        const { stdout: status } = await execAsync('git status --porcelain');
+        isClean = status.trim().length === 0;
+      } catch {
+        isClean = true;
+      }
+
+      let hasRemote = false;
+      try {
+        const { stdout: remoteUrl } = await execAsync('git remote get-url origin');
+        hasRemote = Boolean(remoteUrl && remoteUrl.trim());
+      } catch {
+        hasRemote = false;
+      }
+
       return res.json({
         success: true,
-        branch: branch.trim(),
-        lastCommit: lastCommit.trim(),
-        isClean: status.trim().length === 0,
+        branch,
+        lastCommit,
+        isClean,
+        hasRemote,
         repo: 'truongnguyenvan113/hai-san-me-huong-v1',
       });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return res.json({
+        success: true,
+        branch: 'main',
+        lastCommit: 'Mã nguồn hiện tại',
+        isClean: true,
+        hasRemote: false,
+        repo: 'truongnguyenvan113/hai-san-me-huong-v1',
+      });
     }
   });
 
   app.post('/api/git/push', async (req, res) => {
     try {
-      const { message } = req.body || {};
-      const commitMsg = message?.trim() || `update: đồng bộ thay đổi từ web app lúc ${new Date().toLocaleString('vi-VN')}`;
+      await ensureGitRepo();
+      const { message, token } = req.body || {};
+      const repoName = 'truongnguyenvan113/hai-san-me-huong-v1';
+      const authToken = (token || process.env.GITHUB_TOKEN || '').trim();
 
-      // Add all changes and commit if any
-      await execAsync('git add -A');
+      // Ensure branch is main
       try {
+        await execAsync('git branch -M main');
+      } catch {
+        // ignore
+      }
+
+      // 1. Commit changes
+      const commitMsg = message?.trim() || `update: đồng bộ thay đổi từ web app lúc ${new Date().toLocaleString('vi-VN')}`;
+      try {
+        await execAsync('git add -A');
         await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
       } catch {
-        // Nothing to commit is fine
+        // Already committed or clean
       }
 
-      // Push to origin main
-      const { stdout: pushMain } = await execAsync('git push origin main');
+      // 2. Configure remote if token is provided or exists
+      if (authToken) {
+        const authedUrl = `https://${authToken}@github.com/${repoName}.git`;
+        try {
+          await execAsync(`git remote set-url origin "${authedUrl}"`);
+        } catch {
+          await execAsync(`git remote add origin "${authedUrl}"`);
+        }
+      }
+
+      // Check remote
+      let hasRemote = false;
       try {
-        await execAsync('git push origin main:develop');
-      } catch (devErr) {
-        console.warn('Push to develop branch notice:', devErr);
+        const { stdout: remoteUrl } = await execAsync('git remote get-url origin');
+        hasRemote = Boolean(remoteUrl && remoteUrl.trim());
+      } catch {
+        hasRemote = false;
       }
 
-      return res.json({
-        success: true,
-        message: 'Đã đẩy (push) thành công toàn bộ mã nguồn lên GitHub!',
-        output: pushMain,
-      });
+      if (!hasRemote) {
+        return res.json({
+          success: false,
+          error: `Chưa cấu hình GitHub Token. Vui lòng nhập Personal Access Token (PAT) có quyền repo để đẩy lên https://github.com/${repoName}`,
+        });
+      }
+
+      // 3. Push to origin main and develop
+      try {
+        const { stdout: pushMain } = await execAsync('git push -u origin main');
+        try {
+          await execAsync('git push origin main:develop');
+        } catch {
+          // Ignore develop push notice
+        }
+
+        return res.json({
+          success: true,
+          message: 'Đã đẩy (push) thành công toàn bộ mã nguồn lên GitHub!',
+          output: pushMain || 'Đã đồng bộ nhánh main và develop.',
+        });
+      } catch (pushErr: any) {
+        let cleanErr = (pushErr?.message || 'Lỗi không xác định')
+          .replace(/ghp_[a-zA-Z0-9_-]+/g, '***')
+          .replace(/github_pat_[a-zA-Z0-9_-]+/g, '***')
+          .replace(/https:\/\/[^@]+@/g, 'https://***@');
+
+        // Check if branch needs pulling first or fast-forward
+        if (cleanErr.includes('fetch first') || cleanErr.includes('non-fast-forward')) {
+          try {
+            await execAsync('git pull origin main --rebase');
+            const { stdout: retryPush } = await execAsync('git push -u origin main');
+            try {
+              await execAsync('git push origin main:develop');
+            } catch {
+              // ignore
+            }
+            return res.json({
+              success: true,
+              message: 'Đã hợp nhất và đẩy (push) thành công toàn bộ mã nguồn lên GitHub!',
+              output: retryPush,
+            });
+          } catch (retryErr: any) {
+            cleanErr = (retryErr?.message || cleanErr)
+              .replace(/ghp_[a-zA-Z0-9_-]+/g, '***')
+              .replace(/github_pat_[a-zA-Z0-9_-]+/g, '***')
+              .replace(/https:\/\/[^@]+@/g, 'https://***@');
+          }
+        }
+
+        return res.json({
+          success: false,
+          error: `Không thể đẩy lên GitHub: ${cleanErr}. Vui lòng kiểm tra quyền hạn của GitHub Token (yêu cầu tích quyền "repo").`,
+        });
+      }
     } catch (err: any) {
-      console.error('Git push error:', err);
-      return res.status(500).json({
+      return res.json({
         success: false,
-        error: `Không thể push lên GitHub: ${err?.message || 'Lỗi không xác định'}`,
+        error: `Lỗi xử lý Git: ${err?.message || 'Lỗi không xác định'}`,
       });
     }
   });
 
-  app.post('/api/git/pull', async (_req, res) => {
+  app.post('/api/git/pull', async (req, res) => {
     try {
+      await ensureGitRepo();
+      const { token } = req.body || {};
+      const repoName = 'truongnguyenvan113/hai-san-me-huong-v1';
+      const authToken = (token || process.env.GITHUB_TOKEN || '').trim();
+
+      if (authToken) {
+        const authedUrl = `https://${authToken}@github.com/${repoName}.git`;
+        try {
+          await execAsync(`git remote set-url origin "${authedUrl}"`);
+        } catch {
+          await execAsync(`git remote add origin "${authedUrl}"`);
+        }
+      }
+
+      let hasRemote = false;
+      try {
+        const { stdout: remoteUrl } = await execAsync('git remote get-url origin');
+        hasRemote = Boolean(remoteUrl && remoteUrl.trim());
+      } catch {
+        hasRemote = false;
+      }
+
+      if (!hasRemote) {
+        return res.json({
+          success: false,
+          error: `Vui lòng nhập GitHub Token để kéo cập nhật từ https://github.com/${repoName}`,
+        });
+      }
+
       const { stdout } = await execAsync('git pull origin main');
       return res.json({
         success: true,
@@ -485,10 +646,13 @@ async function startServer() {
         output: stdout,
       });
     } catch (err: any) {
-      console.error('Git pull error:', err);
-      return res.status(500).json({
+      const cleanErr = (err?.message || 'Lỗi không xác định')
+        .replace(/ghp_[a-zA-Z0-9_-]+/g, '***')
+        .replace(/github_pat_[a-zA-Z0-9_-]+/g, '***')
+        .replace(/https:\/\/[^@]+@/g, 'https://***@');
+      return res.json({
         success: false,
-        error: `Không thể pull từ GitHub: ${err?.message || 'Lỗi không xác định'}`,
+        error: `Không thể kéo cập nhật từ GitHub: ${cleanErr}`,
       });
     }
   });

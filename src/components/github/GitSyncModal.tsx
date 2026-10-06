@@ -10,6 +10,9 @@ import {
   RefreshCw,
   GitCommit,
   ShieldCheck,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 interface GitSyncModalProps {
@@ -21,6 +24,7 @@ interface GitStatus {
   branch: string;
   lastCommit: string;
   isClean: boolean;
+  hasRemote?: boolean;
   repo: string;
 }
 
@@ -30,6 +34,13 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
   const [isPushing, setIsPushing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
+  const [githubToken, setGithubToken] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('github_personal_access_token') || '';
+    }
+    return '';
+  });
+  const [showToken, setShowToken] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string; details?: string } | null>(null);
 
   const fetchStatus = async () => {
@@ -43,6 +54,7 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
           branch: data.branch,
           lastCommit: data.lastCommit,
           isClean: data.isClean,
+          hasRemote: data.hasRemote,
           repo: data.repo,
         });
       } else {
@@ -62,19 +74,31 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
   }, [isOpen]);
 
   const handlePush = async () => {
+    const tokenToUse = githubToken.trim();
+    if (!tokenToUse && !status?.hasRemote) {
+      setFeedback({
+        type: 'error',
+        message: 'Vui lòng nhập GitHub Personal Access Token (PAT) có quyền repo bên dưới để cấp quyền đẩy lên kho lưu trữ.',
+      });
+      return;
+    }
+
     setIsPushing(true);
     setFeedback(null);
     try {
       const res = await fetch('/api/git/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: commitMessage }),
+        body: JSON.stringify({
+          message: commitMessage,
+          token: tokenToUse,
+        }),
       });
       const data = await res.json();
       if (data.success) {
         setFeedback({
           type: 'success',
-          message: 'Đã đẩy (push) thành công toàn bộ mã nguồn lên GitHub!',
+          message: data.message || 'Đã đẩy (push) thành công toàn bộ mã nguồn lên GitHub!',
           details: data.output,
         });
         setCommitMessage('');
@@ -96,15 +120,20 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
   };
 
   const handlePull = async () => {
+    const tokenToUse = githubToken.trim();
     setIsPulling(true);
     setFeedback(null);
     try {
-      const res = await fetch('/api/git/pull', { method: 'POST' });
+      const res = await fetch('/api/git/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tokenToUse }),
+      });
       const data = await res.json();
       if (data.success) {
         setFeedback({
           type: 'success',
-          message: 'Đã kéo (pull) cập nhật mới nhất từ GitHub thành công!',
+          message: data.message || 'Đã kéo (pull) cập nhật mới nhất từ GitHub thành công!',
           details: data.output,
         });
         await fetchStatus();
@@ -222,6 +251,51 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
             )}
           </div>
         )}
+
+        {/* GitHub Personal Access Token Input */}
+        <div className="space-y-1.5 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+              Mã GitHub Personal Access Token (PAT)
+            </label>
+            <a
+              href="https://github.com/settings/tokens/new?scopes=repo&description=HaiSanMeHuongSync"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] font-semibold text-teal-700 hover:text-teal-800 hover:underline flex items-center gap-1"
+            >
+              <span>Lấy token mới</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+          <div className="relative">
+            <input
+              type={showToken ? 'text' : 'password'}
+              placeholder="Dán token ghp_... hoặc github_pat_... vào đây"
+              value={githubToken}
+              onChange={(e) => {
+                const val = e.target.value;
+                setGithubToken(val);
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('github_personal_access_token', val.trim());
+                }
+              }}
+              className="w-full pl-3.5 pr-10 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono focus:ring-2 focus:ring-slate-900 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => setShowToken(!showToken)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+              title={showToken ? 'Ẩn token' : 'Hiện token'}
+            >
+              {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            Token được lưu bảo mật trong trình duyệt để chứng thực với GitHub. Yêu cầu token có tích chọn quyền <strong>repo</strong>.
+          </p>
+        </div>
 
         {/* Commit Message Input */}
         <div className="space-y-1.5">

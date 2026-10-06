@@ -256,6 +256,19 @@ function cleanSheetString(value: any): string {
   return String(value).trim().replace(/^'/, '');
 }
 
+// Convert 1-based column number to A1 column letter (e.g. 1 -> A, 17 -> Q, 26 -> Z, 27 -> AA)
+export function columnToLetter(column: number): string {
+  let temp: number;
+  let letter = '';
+  let col = Math.max(1, column);
+  while (col > 0) {
+    temp = (col - 1) % 26;
+    letter = String.fromCharCode(temp + 65) + letter;
+    col = Math.floor((col - temp - 1) / 26);
+  }
+  return letter || 'A';
+}
+
 // 3. Prepare data rows for each sheet tab (Including Tab 7: Settings)
 export function prepareSheetData(
   orders: Order[],
@@ -619,42 +632,46 @@ export async function syncAllToGoogleSheets(
 
   const preparedData = prepareSheetData(orders, batches, customers, products, settings);
 
-  // 1. Clear old data from all tabs safely with single quotes
-  const clearRanges = Object.keys(preparedData).map((title) => `'${title.replace(/'/g, "''")}'`);
+  // 1. Clear old data from all tabs safely using exact column boundaries
   try {
+    const clearRanges = Object.entries(preparedData).map(([sheetTitle, { header }]) => {
+      const endCol = columnToLetter(header.length);
+      return `'${sheetTitle.replace(/'/g, "''")}'!A1:${endCol}1000`;
+    });
     await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
       method: 'POST',
       body: JSON.stringify({ ranges: clearRanges }),
     });
   } catch (clearErr: any) {
-    console.warn('[Google Sheets] batchClear by tab name warning, attempting fallback range clear:', clearErr?.message);
-    try {
-      const fallbackClearRanges = Object.keys(preparedData).map(
-        (title) => `'${title.replace(/'/g, "''")}'!A1:Z2000`
-      );
-      await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
-        method: 'POST',
-        body: JSON.stringify({ ranges: fallbackClearRanges }),
-      });
-    } catch {
-      // Proceed to update values directly
-    }
+    console.warn('[Google Sheets] batchClear warning, proceeding with write:', clearErr?.message);
   }
 
-  // 2. Write new formatted data starting at cell A1 for each sheet tab
-  // Using 'Sheet'!A1 dynamically sizes to exactly match the data array without dimension mismatch errors
+  // 2. Write new formatted data with exact matching rectangular matrix (A1:EndColRowCount)
   const valueRanges = Object.entries(preparedData).map(([sheetTitle, { header, rows }]) => {
-    const sanitizedRows = rows.map((row) =>
-      row.map((cell) => {
-        if (cell === null || cell === undefined) return '';
-        if (typeof cell === 'number') return isNaN(cell) ? 0 : cell;
-        return cell;
-      })
-    );
+    const numCols = header.length;
+    const endCol = columnToLetter(numCols);
+
+    const sanitizedRows = rows.map((row) => {
+      const paddedRow = new Array(numCols).fill('');
+      for (let c = 0; c < numCols; c++) {
+        const cell = row[c];
+        if (cell === null || cell === undefined) {
+          paddedRow[c] = '';
+        } else if (typeof cell === 'number') {
+          paddedRow[c] = isNaN(cell) ? 0 : cell;
+        } else {
+          paddedRow[c] = cell;
+        }
+      }
+      return paddedRow;
+    });
+
+    const allValues = [header, ...sanitizedRows];
+    const totalRows = allValues.length;
 
     return {
-      range: `'${sheetTitle.replace(/'/g, "''")}'!A1`,
-      values: [header, ...sanitizedRows],
+      range: `'${sheetTitle.replace(/'/g, "''")}'!A1:${endCol}${totalRows}`,
+      values: allValues,
     };
   });
 
@@ -749,23 +766,47 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
   }
 
   // 1. Get spreadsheet metadata first to discover existing sheet tabs
-  const meta = await fetchSheetsApi(`/${spreadsheetId}?fields=sheets(properties(sheetId,title))`);
-  const sheetList: Array<{ title: string; sheetId?: number }> = (meta.sheets || []).map((s: any) => ({
-    title: s.properties?.title || '',
-    sheetId: s.properties?.sheetId,
-  })).filter((s: any) => Boolean(s.title));
+  const meta = await fetchSheetsApi(`/${spreadsheetId}?fields=sheets(properties(sheetId,title,gridProperties))`);
+  const sheetList: Array<{ title: string; sheetId?: number; columnCount?: number; rowCount?: number }> = (meta.sheets || [])
+    .map((s: any) => ({
+      title: s.properties?.title || '',
+      sheetId: s.properties?.sheetId,
+      columnCount: s.properties?.gridProperties?.columnCount || 26,
+      rowCount: s.properties?.gridProperties?.rowCount || 1000,
+    }))
+    .filter((s: any) => Boolean(s.title));
 
   if (sheetList.length === 0) {
     throw new Error('Không tìm thấy bất kỳ trang tính nào trong tệp Google Sheets này');
   }
 
-  // 2. Fetch all values safely for existing sheets
-  const ranges = sheetList.map((s) => `'${s.title}'!A1:Z1000`);
-  const response = await fetchSheetsApi(
-    `/${spreadsheetId}/values:batchGet?${ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join('&')}`
-  );
-
-  const valueRanges = response.valueRanges || [];
+  // 2. Fetch all values safely for existing sheets with grid bounds protection & fallback
+  let valueRanges: any[] = [];
+  try {
+    const ranges = sheetList.map((s) => {
+      const maxCol = columnToLetter(Math.min(s.columnCount || 26, 26));
+      const maxRow = Math.min(s.rowCount || 1000, 1000);
+      return `'${s.title.replace(/'/g, "''")}'!A1:${maxCol}${maxRow}`;
+    });
+    const queryString = ranges.map((r) => `ranges=${encodeURIComponent(r)}`).join('&');
+    const response = await fetchSheetsApi(`/${spreadsheetId}/values:batchGet?${queryString}`);
+    valueRanges = response.valueRanges || [];
+  } catch (batchErr: any) {
+    console.warn('[Google Sheets] batchGet failed, falling back to individual tab fetch:', batchErr?.message);
+    for (const sheet of sheetList) {
+      try {
+        const maxCol = columnToLetter(Math.min(sheet.columnCount || 26, 26));
+        const maxRow = Math.min(sheet.rowCount || 1000, 1000);
+        const safeRange = `'${sheet.title.replace(/'/g, "''")}'!A1:${maxCol}${maxRow}`;
+        const singleRes = await fetchSheetsApi(`/${spreadsheetId}/values/${encodeURIComponent(safeRange)}`);
+        if (singleRes && singleRes.values) {
+          valueRanges.push({ range: sheet.title, values: singleRes.values });
+        }
+      } catch (singleErr: any) {
+        console.warn(`[Google Sheets] Could not fetch sheet "${sheet.title}":`, singleErr?.message);
+      }
+    }
+  }
   const getSheetDataByTitle = (targetTitle: string): any[][] => {
     const found = valueRanges.find((vr: any) => {
       if (!vr || !vr.range) return false;
@@ -1441,21 +1482,22 @@ export async function exportSettingsToGoogleSheets(
   try {
     await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
       method: 'POST',
-      body: JSON.stringify({ ranges: [`'${SHEET_NAMES.SETTINGS}'`] }),
+      body: JSON.stringify({ ranges: [`'${SHEET_NAMES.SETTINGS}'!A1:C100`] }),
     });
   } catch (err: any) {
     console.warn('Clear settings sheet warning:', err?.message);
   }
 
-  // 2. Write new formatted settings data starting at A1
+  // 2. Write new formatted settings data with exact range A1:C{rows}
+  const allValues = [settingsData.header, ...settingsData.rows];
   await fetchSheetsApi(`/${spreadsheetId}/values:batchUpdate`, {
     method: 'POST',
     body: JSON.stringify({
       valueInputOption: 'USER_ENTERED',
       data: [
         {
-          range: `'${SHEET_NAMES.SETTINGS}'!A1`,
-          values: [settingsData.header, ...settingsData.rows],
+          range: `'${SHEET_NAMES.SETTINGS}'!A1:C${allValues.length}`,
+          values: allValues,
         },
       ],
     }),
