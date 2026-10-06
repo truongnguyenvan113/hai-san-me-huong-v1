@@ -573,9 +573,17 @@ async function startServer() {
           .replace(/https:\/\/[^@]+@/g, 'https://***@');
 
         // Check if branch needs pulling first or fast-forward
-        if (cleanErr.includes('fetch first') || cleanErr.includes('non-fast-forward')) {
+        if (cleanErr.includes('fetch first') || cleanErr.includes('non-fast-forward') || cleanErr.includes('rejected')) {
           try {
-            await execAsync('git pull origin main --rebase');
+            // Abort any previous pending rebase if present
+            try {
+              await execAsync('git rebase --abort');
+            } catch {
+              // ignore
+            }
+
+            await execAsync('git fetch origin main');
+            await execAsync('git merge origin/main -m "merge: đồng bộ cập nhật từ GitHub" --allow-unrelated-histories');
             const { stdout: retryPush } = await execAsync('git push -u origin main');
             try {
               await execAsync('git push origin main:develop');
