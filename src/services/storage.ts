@@ -721,7 +721,23 @@ class StorageService {
 
   // Batches
   public getBatches(): Batch[] {
-    return this.get<Batch[]>(STORAGE_KEYS.BATCHES, INITIAL_BATCHES);
+    const raw = this.get<Batch[]>(STORAGE_KEYS.BATCHES, INITIAL_BATCHES);
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((b) => b && typeof b === 'object' && b.batch_id)
+      .map((b, idx) => ({
+        ...b,
+        batch_id: b.batch_id || `BATCH-${idx + 1}`,
+        batch_code: b.batch_code || `DOT-${String(idx + 1).padStart(3, '0')}`,
+        batch_name: b.batch_name || `Đợt Gom #${idx + 1}`,
+        status: b.status || 'COLLECTING',
+        batch_date: b.batch_date || new Date().toISOString().slice(0, 10),
+        delivery_date: b.delivery_date || b.batch_date || new Date().toISOString().slice(0, 10),
+        supplier_info: b.supplier_info || { location: 'Quảng Ninh & Cà Mau' },
+        notes: b.notes || '',
+        created_at: b.created_at || new Date().toISOString(),
+        updated_at: b.updated_at || new Date().toISOString(),
+      }));
   }
 
   public saveBatches(batches: Batch[]): void {
@@ -796,7 +812,80 @@ class StorageService {
 
   // Orders
   public getOrders(): Order[] {
-    return this.get<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    const raw = this.get<Order[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((o) => o && typeof o === 'object')
+      .map((o, idx) => {
+        const order_code = o.order_code || `ORD-${String(idx + 1).padStart(3, '0')}`;
+        const order_id = o.order_id || `ORDER-${order_code}`;
+
+        const rawItems = Array.isArray(o.items) ? o.items : [];
+        const items: OrderItem[] = (rawItems.length > 0 ? rawItems : [
+          {
+            order_item_id: `ITEM-${order_code}-1`,
+            order_id,
+            product_id: 'PROD-1',
+            product_name: 'Hải Sản Tươi',
+            quantity_ordered: 1,
+            unit: 'kg',
+            estimated_price: Number(o.total) || 150000,
+            subtotal: Number(o.total) || 150000,
+            status: 'PENDING',
+          }
+        ]).filter(Boolean).map((it: any, iIdx: number) => {
+          const qty = Number(it.quantity_actual ?? it.quantity_ordered) || 1;
+          const price = Number(it.actual_price ?? it.estimated_price) || 0;
+          const subtotal = typeof it.subtotal === 'number' && !isNaN(it.subtotal) ? it.subtotal : Math.round(qty * price);
+          return {
+            order_item_id: it.order_item_id || `ITEM-${order_code}-${iIdx + 1}`,
+            order_id,
+            product_id: it.product_id || `PROD-${iIdx + 1}`,
+            product_name: it.product_name || 'Hải sản',
+            size: it.size || '',
+            quantity_ordered: Number(it.quantity_ordered) || 1,
+            quantity_actual: it.quantity_actual !== undefined && it.quantity_actual !== null ? Number(it.quantity_actual) : undefined,
+            unit: it.unit || 'kg',
+            estimated_price: Number(it.estimated_price) || 0,
+            actual_price: it.actual_price !== undefined && it.actual_price !== null ? Number(it.actual_price) : undefined,
+            subtotal,
+            processing_note: it.processing_note || '',
+            item_note: it.item_note || '',
+            status: it.status || 'PENDING',
+          };
+        });
+
+        const calcSubtotal = items.reduce((s, it) => s + (it.subtotal || 0), 0);
+        const total = typeof o.total === 'number' && !isNaN(o.total) ? o.total : calcSubtotal;
+        const paid_amount = typeof o.paid_amount === 'number' && !isNaN(o.paid_amount) ? o.paid_amount : 0;
+        const debt_amount = typeof o.debt_amount === 'number' && !isNaN(o.debt_amount) ? o.debt_amount : Math.max(0, total - paid_amount);
+
+        return {
+          ...o,
+          order_id,
+          order_code,
+          customer_id: o.customer_id || `CUST-${o.customer_room || idx + 1}`,
+          customer_name: o.customer_name || 'Cư dân',
+          customer_phone: String(o.customer_phone || '').trim(),
+          customer_building: o.customer_building || 'Tòa A',
+          customer_room: o.customer_room || '',
+          batch_id: o.batch_id || 'BATCH-DEFAULT',
+          batch_name: o.batch_name || 'Đợt Gom Hàng',
+          items,
+          subtotal: calcSubtotal,
+          total,
+          paid_amount,
+          debt_amount,
+          status: o.status || 'COLLECTING',
+          delivery_status: o.delivery_status || 'PENDING',
+          payment_status: o.payment_status || (paid_amount >= total && total > 0 ? 'PAID' : paid_amount > 0 ? 'PARTIAL' : 'UNPAID'),
+          payment_method: o.payment_method || 'QR',
+          order_date: o.order_date || o.created_at?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+          delivery_date: o.delivery_date || o.order_date || new Date().toISOString().slice(0, 10),
+          created_at: o.created_at || new Date().toISOString(),
+          updated_at: o.updated_at || new Date().toISOString(),
+        };
+      });
   }
 
   public saveOrders(orders: Order[]): void {
@@ -1348,6 +1437,261 @@ class StorageService {
         currentBank: `${currSet.bank_name || 'ABBANK'} - ${currSet.bank_account || '(Chưa nhập)'}`,
         snapshotBank: `${snapSet.bank_name || 'ABBANK'} - ${snapSet.bank_account || '(Chưa nhập)'}`,
       },
+    };
+  }
+
+  public sanitizeAndHealAllData(): {
+    fixedOrders: number;
+    fixedBatches: number;
+    fixedCustomers: number;
+    fixedProducts: number;
+    orphansResolved: number;
+    message: string;
+  } {
+    const rawOrders = this.get<any[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    const rawBatches = this.get<any[]>(STORAGE_KEYS.BATCHES, INITIAL_BATCHES);
+    const rawCustomers = this.get<any[]>(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const rawProducts = this.get<any[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+
+    let fixedOrders = 0;
+    let fixedBatches = 0;
+    let fixedCustomers = 0;
+    let fixedProducts = 0;
+    let orphansResolved = 0;
+
+    // 1. Heal Batches
+    const healedBatches: Batch[] = (Array.isArray(rawBatches) ? rawBatches : [])
+      .filter((b) => b && typeof b === 'object' && (b.batch_id || b.batch_code || b.batch_name))
+      .map((b, idx) => {
+        const batch_id = b.batch_id || `BATCH-${idx + 1}`;
+        const batch_code = b.batch_code || `DOT-${String(idx + 1).padStart(3, '0')}`;
+        const batch_name = b.batch_name || `Đợt Gom #${idx + 1}`;
+        const status = b.status || 'COLLECTING';
+        if (!b.batch_id || !b.batch_code || !b.batch_name) fixedBatches++;
+        return {
+          ...b,
+          batch_id,
+          batch_code,
+          batch_name,
+          status,
+          batch_date: b.batch_date || new Date().toISOString().slice(0, 10),
+          delivery_date: b.delivery_date || b.batch_date || new Date().toISOString().slice(0, 10),
+          supplier_info: b.supplier_info || { location: 'Quảng Ninh & Cà Mau' },
+          notes: b.notes || '',
+          created_at: b.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      });
+
+    // 2. Heal Products
+    const validProds = (Array.isArray(rawProducts) ? rawProducts : []).filter((p) => p && typeof p === 'object');
+    const healedProducts = deduplicateProductsList(validProds);
+    fixedProducts = Math.max(0, validProds.length - healedProducts.length);
+
+    // 3. Heal Customers
+    const healedCustomers: Customer[] = (Array.isArray(rawCustomers) ? rawCustomers : [])
+      .filter((c) => c && typeof c === 'object' && (c.name || c.room || c.customer_code))
+      .map((c, idx) => {
+        const customer_id = c.customer_id || `CUST-${idx + 1}`;
+        const customer_code = c.customer_code || `CD-${String(idx + 1).padStart(3, '0')}`;
+        const name = c.name || 'Cư dân';
+        const phone = String(c.phone || '').trim();
+        return {
+          ...c,
+          customer_id,
+          customer_code,
+          name,
+          phone,
+          building: c.building || 'Tòa A',
+          room: c.room || '',
+          address: c.address || `${c.building || 'Tòa A'} - P.${c.room || ''}`,
+          note: c.note || '',
+          created_at: c.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      });
+
+    // If there are raw orders but ALL batches were deleted, create a fallback active batch
+    const validRawOrders = (Array.isArray(rawOrders) ? rawOrders : []).filter((o) => o && typeof o === 'object');
+    if (healedBatches.length === 0 && validRawOrders.length > 0) {
+      const defaultBatch: Batch = {
+        batch_id: 'BATCH-001',
+        batch_code: 'DOT-001',
+        batch_name: 'Đợt Gom Hàng #1',
+        batch_date: new Date().toISOString().slice(0, 10),
+        delivery_date: new Date().toISOString().slice(0, 10),
+        status: 'COLLECTING',
+        supplier_info: { location: 'Quảng Ninh & Cà Mau' },
+        notes: 'Đợt gom hàng mặc định sau khi chuẩn hóa dữ liệu',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      healedBatches.push(defaultBatch);
+      fixedBatches++;
+    }
+
+    // 4. Heal Orders & link tightly to existing batches
+    const healedOrders: Order[] = validRawOrders.map((o, idx) => {
+      const order_code = o.order_code || `ORD-${String(idx + 1).padStart(3, '0')}`;
+      const order_id = o.order_id || `ORDER-${order_code}`;
+      const rawItems = Array.isArray(o.items) ? o.items : [];
+      const items: OrderItem[] = (rawItems.length > 0 ? rawItems : [
+        {
+          order_item_id: `ITEM-${order_code}-1`,
+          order_id,
+          product_id: 'PROD-1',
+          product_name: 'Hải Sản Tươi',
+          quantity_ordered: 1,
+          unit: 'kg',
+          estimated_price: Number(o.total) || 150000,
+          subtotal: Number(o.total) || 150000,
+          status: 'PENDING',
+        }
+      ]).filter(Boolean).map((it: any, iIdx: number) => {
+        const qty = Number(it.quantity_actual ?? it.quantity_ordered) || 1;
+        const price = Number(it.actual_price ?? it.estimated_price) || 0;
+        const subtotal = typeof it.subtotal === 'number' && !isNaN(it.subtotal) ? it.subtotal : Math.round(qty * price);
+        return {
+          order_item_id: it.order_item_id || `ITEM-${order_code}-${iIdx + 1}`,
+          order_id,
+          product_id: it.product_id || `PROD-${iIdx + 1}`,
+          product_name: it.product_name || 'Hải sản',
+          size: it.size || '',
+          quantity_ordered: Number(it.quantity_ordered) || 1,
+          quantity_actual: it.quantity_actual !== undefined && it.quantity_actual !== null ? Number(it.quantity_actual) : undefined,
+          unit: it.unit || 'kg',
+          estimated_price: Number(it.estimated_price) || 0,
+          actual_price: it.actual_price !== undefined && it.actual_price !== null ? Number(it.actual_price) : undefined,
+          subtotal,
+          processing_note: it.processing_note || '',
+          item_note: it.item_note || '',
+          status: it.status || 'PENDING',
+        };
+      });
+
+      const calcSubtotal = items.reduce((s, it) => s + (it.subtotal || 0), 0);
+      const total = typeof o.total === 'number' && !isNaN(o.total) ? o.total : calcSubtotal;
+      const paid_amount = typeof o.paid_amount === 'number' && !isNaN(o.paid_amount) ? o.paid_amount : 0;
+      const debt_amount = typeof o.debt_amount === 'number' && !isNaN(o.debt_amount) ? o.debt_amount : Math.max(0, total - paid_amount);
+
+      // Find matching batch
+      let matchedBatch = healedBatches.find(b => b.batch_id === o.batch_id);
+      if (!matchedBatch) {
+        matchedBatch = healedBatches.find(b => b.batch_name.trim().toLowerCase() === String(o.batch_name || '').trim().toLowerCase());
+        if (matchedBatch) {
+          orphansResolved++;
+        }
+      }
+      if (!matchedBatch && healedBatches.length > 0) {
+        matchedBatch = healedBatches[0];
+        orphansResolved++;
+      }
+
+      const batch_id = matchedBatch ? matchedBatch.batch_id : (o.batch_id || 'BATCH-001');
+      const batch_name = matchedBatch ? matchedBatch.batch_name : (o.batch_name || 'Đợt Gom Hàng');
+
+      fixedOrders++;
+
+      return {
+        ...o,
+        order_id,
+        order_code,
+        customer_id: o.customer_id || `CUST-${o.customer_room || idx + 1}`,
+        customer_name: o.customer_name || 'Cư dân',
+        customer_phone: String(o.customer_phone || '').trim(),
+        customer_building: o.customer_building || 'Tòa A',
+        customer_room: o.customer_room || '',
+        batch_id,
+        batch_name,
+        items,
+        subtotal: calcSubtotal,
+        total,
+        paid_amount,
+        debt_amount,
+        status: o.status || 'COLLECTING',
+        delivery_status: o.delivery_status || 'PENDING',
+        payment_status: o.payment_status || (paid_amount >= total && total > 0 ? 'PAID' : paid_amount > 0 ? 'PARTIAL' : 'UNPAID'),
+        payment_method: o.payment_method || 'QR',
+        order_date: o.order_date || o.created_at?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+        delivery_date: o.delivery_date || o.order_date || new Date().toISOString().slice(0, 10),
+        created_at: o.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    // 5. Ensure currentBatchId points to a valid batch
+    const currentBid = this.getCurrentBatchId();
+    if (!currentBid || !healedBatches.some((b) => b.batch_id === currentBid)) {
+      this.setCurrentBatchId(healedBatches[0]?.batch_id || null);
+    }
+
+    this.saveBatches(healedBatches);
+    this.saveProducts(healedProducts);
+    this.saveCustomers(healedCustomers);
+    this.saveOrders(healedOrders);
+
+    const message = `Đã chuẩn hóa & sửa định dạng: ${fixedOrders} đơn hàng, ${fixedBatches} đợt gom, ${fixedCustomers} cư dân, ${fixedProducts} hải sản, giải quyết ${orphansResolved} đơn mồ côi.`;
+
+    return {
+      fixedOrders,
+      fixedBatches,
+      fixedCustomers,
+      fixedProducts,
+      orphansResolved,
+      message,
+    };
+  }
+
+  public getLocalDataHealthReport(): {
+    isHealthy: boolean;
+    totalOrders: number;
+    totalBatches: number;
+    totalCustomers: number;
+    totalProducts: number;
+    orphanOrdersCount: number;
+    nanPriceCount: number;
+    issues: string[];
+  } {
+    const orders = this.get<any[]>(STORAGE_KEYS.ORDERS, []);
+    const batches = this.get<any[]>(STORAGE_KEYS.BATCHES, []);
+    const customers = this.get<any[]>(STORAGE_KEYS.CUSTOMERS, []);
+    const products = this.get<any[]>(STORAGE_KEYS.PRODUCTS, []);
+
+    const issues: string[] = [];
+    const batchIdSet = new Set(batches.map((b) => b?.batch_id).filter(Boolean));
+
+    let orphanOrdersCount = 0;
+    let nanPriceCount = 0;
+
+    for (const o of orders) {
+      if (!o) continue;
+      if (o.batch_id && !batchIdSet.has(o.batch_id)) {
+        orphanOrdersCount++;
+      }
+      if (isNaN(Number(o.total)) || isNaN(Number(o.paid_amount))) {
+        nanPriceCount++;
+      }
+    }
+
+    if (orphanOrdersCount > 0) {
+      issues.push(`Có ${orphanOrdersCount} đơn hàng bị mồ côi (thuộc đợt gom đã bị xóa hoặc sai mã)`);
+    }
+    if (nanPriceCount > 0) {
+      issues.push(`Có ${nanPriceCount} đơn hàng bị lỗi số tiền (NaN / không hợp lệ)`);
+    }
+    if (batches.length === 0 && orders.length > 0) {
+      issues.push('Không có đợt gom nào nhưng vẫn còn đơn hàng trong hệ thống');
+    }
+
+    return {
+      isHealthy: issues.length === 0,
+      totalOrders: orders.length,
+      totalBatches: batches.length,
+      totalCustomers: customers.length,
+      totalProducts: products.length,
+      orphanOrdersCount,
+      nanPriceCount,
+      issues,
     };
   }
 

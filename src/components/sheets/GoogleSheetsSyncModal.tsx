@@ -70,6 +70,9 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     triggerSyncNow,
     pullFromSheets,
     refreshData,
+    repairAndHealLocalData,
+    forceTwoWaySync,
+    getLocalDataHealth,
   } = useApp();
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -78,6 +81,41 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   const [isPulling, setIsPulling] = useState(false);
   const [isCreatingSheet, setIsCreatingSheet] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const [healthReport, setHealthReport] = useState(() => getLocalDataHealth());
+  const [isHealing, setIsHealing] = useState(false);
+  const [healNotice, setHealNotice] = useState<string | null>(null);
+
+  const handleRepairLocal = () => {
+    setIsHealing(true);
+    try {
+      const stats = repairAndHealLocalData();
+      setHealthReport(getLocalDataHealth());
+      setHealNotice(stats.message);
+    } finally {
+      setIsHealing(false);
+    }
+  };
+
+  const handleForceTwoWaySync = async () => {
+    setIsSyncing(true);
+    setErrorMessage(null);
+    try {
+      const ok = await forceTwoWaySync();
+      setHealthReport(getLocalDataHealth());
+      if (ok) {
+        addToast({
+          type: 'SUCCESS',
+          title: 'Đồng bộ 2 chiều thành công!',
+          message: 'Dữ liệu đã được chuẩn hóa và ghi đè an toàn lên Google Sheets.',
+        });
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Lỗi khi đồng bộ cưỡng bức');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const [manualInputId, setManualInputId] = useState('');
   const [showManualInput, setShowManualInput] = useState(false);
@@ -1026,6 +1064,80 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Diagnostic & Healing Card for Local Data & 2-Way Sync */}
+          <div className="bg-gradient-to-r from-amber-50 via-teal-50 to-emerald-50 rounded-2xl p-4 sm:p-5 border border-teal-200 shadow-xs space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-teal-700" />
+                <span className="text-sm font-black text-slate-900">
+                  Khắc Phục Lỗi Format Dữ Liệu & Đồng Bộ 2 Chiều
+                </span>
+              </div>
+              <span
+                className={`px-2.5 py-0.5 text-[11px] font-bold rounded-full ${
+                  healthReport.isHealthy
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-amber-100 text-amber-900 border border-amber-300'
+                }`}
+              >
+                {healthReport.isHealthy ? '✓ Dữ liệu chuẩn sạch' : '⚠️ Phát hiện dữ liệu cần chuẩn hóa'}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Nếu bạn vừa xóa đợt gom hàng hoặc chỉnh sửa khiến việc đẩy lên Google Sheets hoặc nạp về app bị lỗi format: bấm <b>"Quét & Tự Động Sửa Lỗi Format Local"</b> để làm sạch và liên kết lại toàn bộ đơn hàng, sau đó bấm <b>"Đồng Bộ 2 Chiều Cưỡng Bức"</b> để ghi đè an toàn.
+            </p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div className="p-2 bg-white/90 rounded-xl border border-slate-200">
+                <span className="text-slate-500 text-[10px] block">Đợt Gom Hàng</span>
+                <span className="font-bold text-slate-900">{batches.length} đợt</span>
+              </div>
+              <div className="p-2 bg-white/90 rounded-xl border border-slate-200">
+                <span className="text-slate-500 text-[10px] block">Đơn Hàng Cục Bộ</span>
+                <span className="font-bold text-slate-900">{orders.length} đơn</span>
+              </div>
+              <div className="p-2 bg-white/90 rounded-xl border border-slate-200">
+                <span className="text-slate-500 text-[10px] block">Đơn Mồ Côi</span>
+                <span className={`font-bold ${healthReport.orphanOrdersCount > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                  {healthReport.orphanOrdersCount} đơn
+                </span>
+              </div>
+              <div className="p-2 bg-white/90 rounded-xl border border-slate-200">
+                <span className="text-slate-500 text-[10px] block">Trạng Thái</span>
+                <span className="font-bold text-teal-800">Tự Sửa Lỗi Sẵn Sàng</span>
+              </div>
+            </div>
+
+            {healNotice && (
+              <div className="p-2.5 bg-emerald-100/90 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-medium">
+                {healNotice}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleRepairLocal}
+                disabled={isHealing}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isHealing ? 'animate-spin' : ''}`} />
+                {isHealing ? 'Đang sửa...' : '🛠️ Quét & Tự Động Sửa Lỗi Format Local'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleForceTwoWaySync}
+                disabled={isSyncing || isPulling}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              >
+                <ArrowUpFromLine className="w-3.5 h-3.5" />
+                {isSyncing ? 'Đang đồng bộ...' : '⚡ Đồng Bộ 2 Chiều Cưỡng Bức (Ghi Đè Sạch)'}
+              </button>
+            </div>
           </div>
 
           {/* Section 3: Structure of 7 Sheet Tabs */}

@@ -68,6 +68,11 @@ export const SettingsView: React.FC = () => {
     deleteCategory,
     resetCategoriesToDefault,
     setIsGitSyncOpen,
+    repairAndHealLocalData,
+    forceTwoWaySync,
+    getLocalDataHealth,
+    orders,
+    batches,
   } = useApp();
 
   const [newUnitInput, setNewUnitInput] = useState('');
@@ -82,6 +87,35 @@ export const SettingsView: React.FC = () => {
   const [isPullingSheets, setIsPullingSheets] = useState(false);
   const [snapshotToRestore, setSnapshotToRestore] = useState<BackupSnapshot | null>(null);
   const [isQuickRestoreConfirmOpen, setIsQuickRestoreConfirmOpen] = useState(false);
+
+  const [healthReport, setHealthReport] = useState(() => getLocalDataHealth());
+  const [isHealingLocal, setIsHealingLocal] = useState(false);
+  const [isForceSyncing, setIsForceSyncing] = useState(false);
+  const [healNotice, setHealNotice] = useState<string | null>(null);
+
+  const handleRepairLocal = () => {
+    setIsHealingLocal(true);
+    try {
+      const stats = repairAndHealLocalData();
+      setHealthReport(getLocalDataHealth());
+      setHealNotice(stats.message);
+    } finally {
+      setIsHealingLocal(false);
+    }
+  };
+
+  const handleForceTwoWaySync = async () => {
+    setIsForceSyncing(true);
+    try {
+      const ok = await forceTwoWaySync();
+      setHealthReport(getLocalDataHealth());
+      if (ok) {
+        addToast('success', 'Đồng bộ 2 chiều thành công', 'Dữ liệu đã chuẩn hóa và ghi đè an toàn lên Google Sheets.');
+      }
+    } finally {
+      setIsForceSyncing(false);
+    }
+  };
 
   const handleBank1Change = (bankCodeOrName: string) => {
     const bank = getBankByCodeOrName(bankCodeOrName);
@@ -867,6 +901,80 @@ export const SettingsView: React.FC = () => {
               <Check className="w-3 h-3" /> Tab 7: Cấu Hình Hệ Thống (Mới)
             </div>
             <div className="text-[11px] text-emerald-100/90">Lưu trữ 2 tài khoản ngân hàng, mã BIN, cài đặt VietQR & thông tin shop</div>
+          </div>
+        </div>
+
+        {/* Dedicated Format Healing & 2-Way Sync Repair Tool */}
+        <div className="bg-slate-900/60 rounded-xl p-4 border border-emerald-400/30 space-y-3 mt-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span className="text-xs font-black text-white uppercase tracking-wider">
+                Công Cụ Khắc Phục Lỗi Format & Đồng Bộ 2 Chiều
+              </span>
+            </div>
+            <span
+              className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                healthReport.isHealthy
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
+                  : 'bg-amber-500/20 text-amber-300 border border-amber-400/30'
+              }`}
+            >
+              {healthReport.isHealthy ? '✓ Dữ liệu chuẩn' : '⚠️ Có điểm cần chuẩn hóa'}
+            </span>
+          </div>
+
+          <p className="text-[11px] text-emerald-100/80 leading-relaxed">
+            Nếu bạn vừa xóa đợt gom hàng hoặc sửa đơn khiến Google Sheets không nhận được dữ liệu hoặc không đồng bộ ngược về được: hãy nhấn <b>"Quét & Tự Động Sửa Lỗi Format Local"</b> để liên kết lại đơn hàng và dọn sạch dữ liệu mồ côi, sau đó bấm <b>"Đồng Bộ 2 Chiều Cưỡng Bức"</b>.
+          </p>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="p-2 bg-white/10 rounded-lg">
+              <div className="text-[10px] text-emerald-200/70">Đợt Gom Hàng</div>
+              <div className="font-bold text-white">{batches.length} đợt</div>
+            </div>
+            <div className="p-2 bg-white/10 rounded-lg">
+              <div className="text-[10px] text-emerald-200/70">Đơn Hàng Cục Bộ</div>
+              <div className="font-bold text-white">{orders.length} đơn</div>
+            </div>
+            <div className="p-2 bg-white/10 rounded-lg">
+              <div className="text-[10px] text-emerald-200/70">Đơn Mồ Côi</div>
+              <div className={`font-bold ${healthReport.orphanOrdersCount > 0 ? 'text-rose-400' : 'text-emerald-300'}`}>
+                {healthReport.orphanOrdersCount} đơn
+              </div>
+            </div>
+            <div className="p-2 bg-white/10 rounded-lg">
+              <div className="text-[10px] text-emerald-200/70">Trạng Thái Local</div>
+              <div className="font-bold text-teal-300">Sẵn Sàng Sửa Lỗi</div>
+            </div>
+          </div>
+
+          {healNotice && (
+            <div className="p-2.5 bg-emerald-500/20 border border-emerald-400/40 rounded-lg text-xs text-emerald-200">
+              {healNotice}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={handleRepairLocal}
+              disabled={isHealingLocal}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isHealingLocal ? 'animate-spin' : ''}`} />
+              {isHealingLocal ? 'Đang sửa...' : 'Quét & Tự Động Sửa Lỗi Format Local'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleForceTwoWaySync}
+              disabled={isForceSyncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <ArrowUpFromLine className="w-3.5 h-3.5" />
+              {isForceSyncing ? 'Đang đồng bộ...' : 'Đồng Bộ 2 Chiều Cưỡng Bức (Ghi Đè Sạch)'}
+            </button>
           </div>
         </div>
       </div>

@@ -85,6 +85,25 @@ interface AppContextType {
   pullFromSheets: (targetSpreadsheetId?: string) => Promise<RestoreStats | null>;
   exportSettingsToSheets: () => Promise<boolean>;
   setSpreadsheetInfo: (id: string, url: string) => void;
+  repairAndHealLocalData: () => {
+    fixedOrders: number;
+    fixedBatches: number;
+    fixedCustomers: number;
+    fixedProducts: number;
+    orphansResolved: number;
+    message: string;
+  };
+  forceTwoWaySync: () => Promise<boolean>;
+  getLocalDataHealth: () => {
+    isHealthy: boolean;
+    totalOrders: number;
+    totalBatches: number;
+    totalCustomers: number;
+    totalProducts: number;
+    orphanOrdersCount: number;
+    nanPriceCount: number;
+    issues: string[];
+  };
 
   // Modals & UI States
   isCreateOrderOpen: boolean;
@@ -296,6 +315,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const refreshData = () => {
     storage.init();
+    // Auto-heal any data format anomalies on load
+    storage.sanitizeAndHealAllData();
     const freshBatches = storage.getBatches();
     const freshOrders = storage.getOrders();
     setSettings(storage.getSettings());
@@ -316,6 +337,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         storage.setCurrentBatchId(nextBatchId);
       }
     }
+  };
+
+  const repairAndHealLocalData = () => {
+    const stats = storage.sanitizeAndHealAllData();
+    refreshData();
+    addToast(
+      'success',
+      'Đã chuẩn hóa & sửa lỗi định dạng dữ liệu',
+      stats.message
+    );
+    return stats;
+  };
+
+  const forceTwoWaySync = async (): Promise<boolean> => {
+    storage.sanitizeAndHealAllData();
+    refreshData();
+    addToast('info', 'Bắt đầu đồng bộ 2 chiều', 'Đang quét dữ liệu sạch và đồng bộ lại toàn diện lên Google Sheets...');
+    return await executeAutoSync(true);
+  };
+
+  const getLocalDataHealth = () => {
+    return storage.getLocalDataHealthReport();
   };
 
   useEffect(() => {
@@ -900,6 +943,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         pullFromSheets,
         exportSettingsToSheets,
         setSpreadsheetInfo,
+        repairAndHealLocalData,
+        forceTwoWaySync,
+        getLocalDataHealth,
         isCreateOrderOpen,
         setIsCreateOrderOpen,
         isCreateBatchOpen,

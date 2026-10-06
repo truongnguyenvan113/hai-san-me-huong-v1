@@ -177,10 +177,11 @@ export async function createSeafoodSpreadsheet(
   };
 }
 
-// 2. Ensure all 7 required sheet tabs exist in an existing spreadsheet
+// 2. Ensure all 7 required sheet tabs exist in an existing spreadsheet and have sufficient grid space
 export async function ensureSheetTabsExist(spreadsheetId: string) {
   const meta = await fetchSheetsApi(`/${spreadsheetId}`);
-  const existingTitles: string[] = (meta.sheets || []).map((s: any) =>
+  const existingSheets = meta.sheets || [];
+  const existingTitles: string[] = existingSheets.map((s: any) =>
     String(s.properties?.title || '').trim().toLowerCase()
   );
 
@@ -188,20 +189,57 @@ export async function ensureSheetTabsExist(spreadsheetId: string) {
     (name) => !existingTitles.includes(name.trim().toLowerCase())
   );
 
-  if (missingSheets.length > 0) {
-    const requests = missingSheets.map((title) => ({
-      addSheet: {
-        properties: {
-          title,
-          gridProperties: { frozenRowCount: 1 },
-        },
-      },
-    }));
+  const requests: any[] = [];
 
-    await fetchSheetsApi(`/${spreadsheetId}:batchUpdate`, {
-      method: 'POST',
-      body: JSON.stringify({ requests }),
+  if (missingSheets.length > 0) {
+    missingSheets.forEach((title) => {
+      requests.push({
+        addSheet: {
+          properties: {
+            title,
+            gridProperties: {
+              rowCount: 1000,
+              columnCount: 26,
+              frozenRowCount: 1,
+            },
+          },
+        },
+      });
     });
+  }
+
+  // Ensure all existing sheets have at least 1000 rows and 26 columns to prevent grid limit errors
+  for (const s of existingSheets) {
+    const sId = s.properties?.sheetId;
+    const grid = s.properties?.gridProperties;
+    const currentRows = grid?.rowCount || 0;
+    const currentCols = grid?.columnCount || 0;
+
+    if (currentRows < 1000 || currentCols < 26) {
+      requests.push({
+        updateSheetProperties: {
+          properties: {
+            sheetId: sId,
+            gridProperties: {
+              rowCount: Math.max(currentRows, 1000),
+              columnCount: Math.max(currentCols, 26),
+            },
+          },
+          fields: 'gridProperties(rowCount,columnCount)',
+        },
+      });
+    }
+  }
+
+  if (requests.length > 0) {
+    try {
+      await fetchSheetsApi(`/${spreadsheetId}:batchUpdate`, {
+        method: 'POST',
+        body: JSON.stringify({ requests }),
+      });
+    } catch (updateErr: any) {
+      console.warn('[Google Sheets] ensureSheetTabsExist update notice:', updateErr?.message);
+    }
   }
 }
 
@@ -269,15 +307,70 @@ export function columnToLetter(column: number): string {
   return letter || 'A';
 }
 
+// Parse numbers and currency strings from Google Sheets reliably (e.g. "1.500.000", "280k", "150,000", 250000)
+export function parseVietnameseCurrency(raw: any): number {
+  if (typeof raw === 'number') return isNaN(raw) ? 0 : Math.round(raw);
+  if (!raw) return 0;
+  let str = String(raw).trim().toLowerCase();
+
+  // Match "k" suffix (e.g. "280k", "55k", "145.5k")
+  const kMatch = str.match(/^([\d.,]+)\s*k$/);
+  if (kMatch) {
+    const num = parseFloat(kMatch[1].replace(',', '.'));
+    return !isNaN(num) ? Math.round(num * 1000) : 0;
+  }
+
+  // Remove non-numeric characters except dots and commas
+  str = str.replace(/[^\d.,]/g, '');
+  if (!str) return 0;
+
+  // Handle dots as thousand separators (e.g. "1.500.000" or "280.000")
+  const dotCount = (str.match(/\./g) || []).length;
+  const commaCount = (str.match(/,/g) || []).length;
+
+  if (dotCount > 1) {
+    str = str.replace(/\./g, '');
+  } else if (commaCount > 1) {
+    str = str.replace(/,/g, '');
+  } else if (dotCount === 1 && commaCount === 1) {
+    if (str.indexOf('.') < str.indexOf(',')) {
+      str = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      str = str.replace(/,/g, '');
+    }
+  } else if (dotCount === 1 && commaCount === 0) {
+    const parts = str.split('.');
+    if (parts.length === 2 && parts[1].length === 3) {
+      str = parts[0] + parts[1];
+    }
+  } else if (commaCount === 1 && dotCount === 0) {
+    const parts = str.split(',');
+    if (parts.length === 2 && parts[1].length === 3) {
+      str = parts[0] + parts[1];
+    } else {
+      str = str.replace(',', '.');
+    }
+  }
+
+  const val = parseFloat(str);
+  return !isNaN(val) ? Math.round(val) : 0;
+}
+
 // 3. Prepare data rows for each sheet tab (Including Tab 7: Settings)
 export function prepareSheetData(
-  orders: Order[],
-  batches: Batch[],
-  customers: Customer[],
-  products: Product[],
+  ordersInput: Order[],
+  batchesInput: Batch[],
+  customersInput: Customer[],
+  productsInput: Product[],
   settingsInput?: StoreSettings
 ) {
   const settings = settingsInput || storage.getSettings();
+
+  // Bulletproof sanitation of all incoming arrays
+  const orders = (Array.isArray(ordersInput) ? ordersInput : []).filter((o) => o && typeof o === 'object');
+  const batches = (Array.isArray(batchesInput) ? batchesInput : []).filter((b) => b && typeof b === 'object');
+  const customers = (Array.isArray(customersInput) ? customersInput : []).filter((c) => c && typeof c === 'object');
+  const products = (Array.isArray(productsInput) ? productsInput : []).filter((p) => p && typeof p === 'object');
 
   // Tab 1: Đơn Hàng Chi Tiết
   const ordersHeader = [
@@ -301,31 +394,36 @@ export function prepareSheetData(
   ];
 
   const ordersRows = orders.map((o) => {
-    const itemsSummary = (o.items || [])
+    const rawItems = Array.isArray(o.items) ? o.items.filter(Boolean) : [];
+    const itemsSummary = rawItems
       .map((item) => {
-        const qty = item.quantity_actual ?? item.quantity_ordered;
+        const qty = item.quantity_actual ?? item.quantity_ordered ?? 1;
         const sizeStr = item.size ? ` (${item.size})` : '';
         const noteStr = item.processing_note ? ` [${item.processing_note}]` : '';
-        return `${item.product_name}${sizeStr}: ${qty} ${item.unit}${noteStr}`;
+        return `${item.product_name || 'Hải sản'}${sizeStr}: ${qty} ${item.unit || 'kg'}${noteStr}`;
       })
       .join('; ');
 
+    const total = typeof o.total === 'number' && !isNaN(o.total) ? Math.round(o.total) : 0;
+    const paid = typeof o.paid_amount === 'number' && !isNaN(o.paid_amount) ? Math.round(o.paid_amount) : 0;
+    const debt = typeof o.debt_amount === 'number' && !isNaN(o.debt_amount) ? Math.round(o.debt_amount) : Math.max(0, total - paid);
+
     return [
-      o.order_code,
-      o.customer_name,
+      o.order_code || '',
+      o.customer_name || 'Cư dân',
       preserveLeadingZero(o.customer_phone),
       o.customer_building || '',
       o.customer_room || '',
       o.batch_name || '',
       o.delivery_date || '',
       itemsSummary,
-      o.total || 0,
-      o.paid_amount || 0,
-      o.debt_amount || 0,
-      translateOrderStatus(o.status),
-      translateDeliveryStatus(o.delivery_status),
-      translatePaymentStatus(o.payment_status),
-      o.payment_method || '',
+      total,
+      paid,
+      debt,
+      translateOrderStatus(o.status || 'COLLECTING'),
+      translateDeliveryStatus(o.delivery_status || 'PENDING'),
+      translatePaymentStatus(o.payment_status || 'UNPAID'),
+      o.payment_method || 'QR',
       o.note || '',
       o.created_at || '',
     ];
@@ -351,14 +449,15 @@ export function prepareSheetData(
   ];
 
   const batchesRows = batches.map((b) => {
-    const batchOrders = orders.filter((o) => o.batch_id === b.batch_id && o.status !== 'CANCELLED');
-    const totalRev = batchOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-    const totalPaid = batchOrders.reduce((sum, o) => sum + (o.paid_amount || 0), 0);
-    const totalDebt = batchOrders.reduce((sum, o) => sum + (o.debt_amount || 0), 0);
+    const batchOrders = orders.filter((o) => o && o.batch_id === b.batch_id && o.status !== 'CANCELLED');
+    const totalRev = batchOrders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+    const totalPaid = batchOrders.reduce((sum, o) => sum + (Number(o.paid_amount) || 0), 0);
+    const totalDebt = batchOrders.reduce((sum, o) => sum + (Number(o.debt_amount) || 0), 0);
     const totalWeight = batchOrders.reduce((sum, o) => {
+      const orderItems = Array.isArray(o.items) ? o.items.filter(Boolean) : [];
       return (
         sum +
-        (o.items || []).reduce((itemSum, item) => itemSum + (item.quantity_actual ?? item.quantity_ordered ?? 0), 0)
+        orderItems.reduce((itemSum, item) => itemSum + (Number(item?.quantity_actual ?? item?.quantity_ordered) || 0), 0)
       );
     }, 0);
 
@@ -627,23 +726,39 @@ export async function syncAllToGoogleSheets(
   products: Product[],
   settings?: StoreSettings
 ): Promise<SyncStats> {
-  // Ensure all 7 tabs exist first
+  // Always sanitize and heal local data before syncing to ensure flawless tabular matrices
+  storage.sanitizeAndHealAllData();
+
+  // Ensure all 7 tabs exist and have at least 1,000 rows and 26 columns
   await ensureSheetTabsExist(spreadsheetId);
 
-  const preparedData = prepareSheetData(orders, batches, customers, products, settings);
+  const safeOrders = orders && orders.length > 0 ? orders : storage.getOrders();
+  const safeBatches = batches && batches.length > 0 ? batches : storage.getBatches();
+  const safeCustomers = customers && customers.length > 0 ? customers : storage.getCustomers();
+  const safeProducts = products && products.length > 0 ? products : storage.getProducts();
 
-  // 1. Clear old data from all tabs safely using exact column boundaries
+  const preparedData = prepareSheetData(safeOrders, safeBatches, safeCustomers, safeProducts, settings);
+
+  // 1. Clear old data from all tabs safely using unbounded A:Z ranges (eliminating grid limits errors completely)
   try {
-    const clearRanges = Object.entries(preparedData).map(([sheetTitle, { header }]) => {
-      const endCol = columnToLetter(header.length);
-      return `'${sheetTitle.replace(/'/g, "''")}'!A1:${endCol}1000`;
+    const clearRanges = Object.keys(preparedData).map((sheetTitle) => {
+      return `'${sheetTitle.replace(/'/g, "''")}'!A:Z`;
     });
     await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
       method: 'POST',
       body: JSON.stringify({ ranges: clearRanges }),
     });
   } catch (clearErr: any) {
-    console.warn('[Google Sheets] batchClear warning, proceeding with write:', clearErr?.message);
+    console.warn('[Google Sheets] batchClear unbounded A:Z notice, attempting sheet name fallback:', clearErr?.message);
+    try {
+      const fallbackRanges = Object.keys(preparedData).map((sheetTitle) => `'${sheetTitle.replace(/'/g, "''")}'`);
+      await fetchSheetsApi(`/${spreadsheetId}/values:batchClear`, {
+        method: 'POST',
+        body: JSON.stringify({ ranges: fallbackRanges }),
+      });
+    } catch (fallbackErr: any) {
+      console.warn('[Google Sheets] batchClear fallback notice, proceeding with write:', fallbackErr?.message);
+    }
   }
 
   // 2. Write new formatted data with exact matching rectangular matrix (A1:EndColRowCount)
@@ -685,10 +800,10 @@ export async function syncAllToGoogleSheets(
 
   const now = new Date().toISOString();
   return {
-    ordersCount: orders.length,
-    batchesCount: batches.length,
-    customersCount: customers.length,
-    productsCount: products.length,
+    ordersCount: safeOrders.length,
+    batchesCount: safeBatches.length,
+    customersCount: safeCustomers.length,
+    productsCount: safeProducts.length,
     weighingCount: preparedData[SHEET_NAMES.WEIGHING].rows.length,
     financeCount: preparedData[SHEET_NAMES.FINANCE].rows.length,
     settingsSynced: true,
@@ -808,14 +923,17 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     }
   }
   const getSheetDataByTitle = (targetTitle: string): any[][] => {
+    const targetNorm = targetTitle.trim().toLowerCase();
     const found = valueRanges.find((vr: any) => {
       if (!vr || !vr.range) return false;
-      const cleanRange = vr.range.replace(/^'|'$/g, '');
+      const cleanRange = vr.range.replace(/^'|'$/g, '').toLowerCase();
+      const rangeSheetName = vr.range.includes('!')
+        ? vr.range.split('!')[0].replace(/^'|'$/g, '').trim().toLowerCase()
+        : cleanRange.trim();
       return (
-        cleanRange.startsWith(targetTitle) ||
-        cleanRange.startsWith(`'${targetTitle}'`) ||
-        vr.range.startsWith(`'${targetTitle}'!`) ||
-        vr.range.startsWith(`${targetTitle}!`)
+        rangeSheetName === targetNorm ||
+        rangeSheetName.includes(targetNorm) ||
+        targetNorm.includes(rangeSheetName)
       );
     });
     return (found && found.values) || [];
@@ -948,8 +1066,8 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
 
       const actQty = parseFloat(String(r[wColActualQty] || '0').replace(/[^\d.]/g, ''));
       const ordQty = parseFloat(String(r[wColOrderedQty] || '0').replace(/[^\d.]/g, ''));
-      const actPrice = parseFloat(String(r[wColPrice] || '0').replace(/[^\d.]/g, ''));
-      const subtotal = parseFloat(String(r[wColSubtotal] || '0').replace(/[^\d.]/g, ''));
+      const actPrice = parseVietnameseCurrency(r[wColPrice]);
+      const subtotal = parseVietnameseCurrency(r[wColSubtotal]);
       const rawWStatus = String(r[wColStatus] || '').toLowerCase();
       const isWeighed = rawWStatus.includes('xong') || rawWStatus.includes('đã cân') || (actQty > 0 && !isNaN(actQty));
 
@@ -1135,9 +1253,9 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
       const rawBatch = r[colBatch] ? String(r[colBatch]).trim() : '';
       const deliveryDate = r[colDelivery] ? String(r[colDelivery]).trim() : '';
       const itemsSummaryStr = r[colItems] ? String(r[colItems]).trim() : '';
-      const total = parseFloat(String(r[colTotal] || '0').replace(/[^\d.]/g, '')) || 0;
-      const paid = parseFloat(String(r[colPaid] || '0').replace(/[^\d.]/g, '')) || 0;
-      const debt = parseFloat(String(r[colDebt] || '0').replace(/[^\d.]/g, '')) || Math.max(0, total - paid);
+      const total = parseVietnameseCurrency(r[colTotal]);
+      const paid = parseVietnameseCurrency(r[colPaid]);
+      const debt = r[colDebt] ? parseVietnameseCurrency(r[colDebt]) : Math.max(0, total - paid);
       const rawOrderStatus = String(r[colOrderStatus] || '').toLowerCase().trim();
       const rawDeliveryStatus = String(r[colDeliveryStatus] || '').toLowerCase().trim();
       const paymentMethod = String(r[colPaymentMethod] || 'QR').trim();
@@ -1433,7 +1551,7 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
         size: r[colSize] ? String(r[colSize]).trim() : '',
         origin: r[colOrigin] ? String(r[colOrigin]).trim() : '',
         unit: (r[colUnit] ? String(r[colUnit]).trim() : 'kg') as any,
-        default_price: parseFloat(String(r[colPrice] || '0').replace(/[^\d.]/g, '')) || 0,
+        default_price: parseVietnameseCurrency(r[colPrice]),
         status: String(r[colStatus] || '').includes('ngưng') ? 'INACTIVE' : 'ACTIVE',
         description: r[colDesc] ? String(r[colDesc]).trim() : '',
       });
@@ -1443,20 +1561,67 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
   // ----------------------------------------------------
   // PERSIST RESTORED DATA TO STORAGE
   // ----------------------------------------------------
+  const hasOrdersTab = sheetList.some((s) => {
+    const t = s.title.toLowerCase();
+    return t.includes('đơn hàng') || t.includes('orders') || t.includes('đơn');
+  });
+  const hasBatchesTab = sheetList.some((s) => {
+    const t = s.title.toLowerCase();
+    return t.includes('đợt gom') || t.includes('batches') || t.includes('đợt hàng');
+  });
+  const hasCustomersTab = sheetList.some((s) => {
+    const t = s.title.toLowerCase();
+    return t.includes('cư dân') || t.includes('customers') || t.includes('danh bạ');
+  });
+  const hasProductsTab = sheetList.some((s) => {
+    const t = s.title.toLowerCase();
+    return t.includes('hải sản') || t.includes('products') || t.includes('danh mục');
+  });
+
   if (restoredProducts.length > 0) {
     storage.saveProducts(restoredProducts);
+  } else if (hasProductsTab && productsRows.length <= 1) {
+    // If sheet tab is present but explicitly empty, keep existing to prevent accidental total wipe
+    console.info('[Google Sheets] Products tab empty on sheets, keeping current products catalog.');
   }
+
   if (restoredCustomers.length > 0) {
     storage.saveCustomers(restoredCustomers);
   }
-  if (restoredBatches.length > 0) {
-    storage.saveBatches(restoredBatches);
-    // Set active batch ID to the first restored batch
-    storage.setCurrentBatchId(restoredBatches[0].batch_id);
+
+  if (hasBatchesTab) {
+    if (restoredBatches.length > 0) {
+      storage.saveBatches(restoredBatches);
+      storage.setCurrentBatchId(restoredBatches[0].batch_id);
+    } else if (restoredOrders.length > 0) {
+      // If batch tab had no rows but orders exist, create default batch for them
+      const autoBatch: Batch = {
+        batch_id: 'BATCH-001',
+        batch_code: 'DOT-001',
+        batch_name: 'Đợt Gom Hàng #1',
+        batch_date: new Date().toISOString().slice(0, 10),
+        delivery_date: new Date().toISOString().slice(0, 10),
+        status: 'COLLECTING',
+        supplier_info: { location: 'Quảng Ninh & Cà Mau' },
+        notes: 'Đợt tạo tự động khi nạp đơn hàng từ Google Sheets',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      storage.saveBatches([autoBatch]);
+      storage.setCurrentBatchId(autoBatch.batch_id);
+    } else {
+      // Both batches and orders on sheets are empty: user deleted batch on sheets!
+      storage.saveBatches([]);
+      storage.setCurrentBatchId(null);
+    }
   }
-  if (restoredOrders.length > 0) {
+
+  if (hasOrdersTab) {
     storage.saveOrders(restoredOrders);
   }
+
+  // Always self-heal local storage after restore to ensure pristine format & valid references
+  storage.sanitizeAndHealAllData();
 
   const now = new Date().toISOString();
   return {
