@@ -34,6 +34,7 @@ import {
   Edit2,
   Layers,
   GitBranch,
+  Flame,
 } from 'lucide-react';
 import { ALL_BANKS, getBankByCodeOrName } from '../../utils/banks';
 
@@ -68,6 +69,7 @@ export const SettingsView: React.FC = () => {
     deleteCategory,
     resetCategoriesToDefault,
     setIsGitSyncOpen,
+    clearAllLocalData,
     repairAndHealLocalData,
     forceTwoWaySync,
     getLocalDataHealth,
@@ -974,6 +976,16 @@ export const SettingsView: React.FC = () => {
             >
               <ArrowUpFromLine className="w-3.5 h-3.5" />
               {isForceSyncing ? 'Đang đồng bộ...' : 'Đồng Bộ 2 Chiều Cưỡng Bức (Ghi Đè Sạch)'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsSheetsSyncOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
+              title="Xóa sạch local và kéo dữ liệu chuẩn từ Google Sheets"
+            >
+              <Flame className="w-3.5 h-3.5" />
+              Xóa Sạch Local & Kéo Data Từ Sheets (Clean Slate Pull)
             </button>
           </div>
         </div>

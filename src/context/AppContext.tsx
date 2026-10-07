@@ -18,6 +18,7 @@ import { storage } from '../services/storage';
 import {
   autoSyncAll,
   pullAndRestoreFromGoogleSheets,
+  cleanPullAndRestoreFromGoogleSheets,
   exportSettingsToGoogleSheets,
   searchSpreadsheetsOnDrive,
   createSeafoodSpreadsheet,
@@ -83,6 +84,8 @@ interface AppContextType {
   setAutoSyncEnabled: (enabled: boolean) => void;
   triggerSyncNow: () => Promise<boolean>;
   pullFromSheets: (targetSpreadsheetId?: string) => Promise<RestoreStats | null>;
+  cleanPullFromSheets: (targetSpreadsheetId?: string) => Promise<RestoreStats | null>;
+  clearAllLocalData: (preserveTokens?: boolean) => void;
   exportSettingsToSheets: () => Promise<boolean>;
   setSpreadsheetInfo: (id: string, url: string) => void;
   repairAndHealLocalData: () => {
@@ -476,6 +479,67 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addToast('error', 'Lỗi đồng bộ từ Sheets', err?.message || 'Không thể đọc dữ liệu từ tệp Google Sheets');
       return null;
     }
+  };
+
+  // CLEAN SLATE PULL: Wipe local operational cache and pull fresh mirror from Google Sheets
+  const cleanPullFromSheets = async (targetSpreadsheetId?: string): Promise<RestoreStats | null> => {
+    const activeSpreadsheetId = targetSpreadsheetId || spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    if (!activeSpreadsheetId) {
+      addToast('error', 'Chưa có Google Sheets', 'Vui lòng liên kết tệp Google Sheets trước khi xóa và tải dữ liệu');
+      return null;
+    }
+
+    const token = await getAccessToken();
+    if (!token) {
+      setSyncStatus('UNAUTHENTICATED');
+      addToast('warning', 'Chưa đăng nhập Google', 'Vui lòng kết nối tài khoản Google để tải dữ liệu');
+      return null;
+    }
+
+    try {
+      setSyncStatus('SYNCING');
+      const restoreStats = await cleanPullAndRestoreFromGoogleSheets(activeSpreadsheetId);
+      refreshData();
+
+      const latestBatches = storage.getBatches();
+      if (latestBatches.length > 0) {
+        setSelectedBatchId(latestBatches[0].batch_id);
+        storage.setCurrentBatchId(latestBatches[0].batch_id);
+      } else {
+        setSelectedBatchId(null);
+      }
+
+      setSyncStatus('SYNCED');
+      addToast(
+        'success',
+        'Đã dọn sạch local & nạp dữ liệu chuẩn từ Google Sheets',
+        `Đã nạp mới: ${restoreStats.batchesCount} đợt gom, ${restoreStats.ordersCount} đơn hàng, ${restoreStats.customersCount} cư dân, ${restoreStats.productsCount} hải sản!`
+      );
+      return restoreStats;
+    } catch (err: any) {
+      console.error('Lỗi khi xóa và nạp từ Sheets:', err);
+      refreshData();
+      const isAuthErr =
+        err?.message?.includes('hết hạn') ||
+        err?.message?.includes('đăng nhập') ||
+        err?.message?.includes('authentication credentials') ||
+        err?.message?.includes('UNAUTHENTICATED');
+      setSyncStatus(isAuthErr ? 'UNAUTHENTICATED' : 'ERROR');
+      addToast('error', 'Lỗi xóa và nạp từ Sheets', err?.message || 'Không thể đọc dữ liệu từ tệp Google Sheets');
+      return null;
+    }
+  };
+
+  // Clear all local data completely (with safety backup)
+  const clearAllLocalData = (preserveTokens = true) => {
+    storage.clearEntireLocalStorage(preserveTokens);
+    refreshData();
+    setSelectedBatchId(null);
+    addToast(
+      'info',
+      'Đã dọn sạch dữ liệu cục bộ',
+      'Toàn bộ đơn hàng, đợt gom và danh bạ trên máy đã được xóa sạch. Hệ thống sẵn sàng nạp mới từ Google Sheets.'
+    );
   };
 
   // Export only settings to Google Sheets
@@ -941,6 +1005,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         },
         triggerSyncNow,
         pullFromSheets,
+        cleanPullFromSheets,
+        clearAllLocalData,
         exportSettingsToSheets,
         setSpreadsheetInfo,
         repairAndHealLocalData,

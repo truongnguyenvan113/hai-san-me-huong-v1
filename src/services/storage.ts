@@ -1705,6 +1705,81 @@ class StorageService {
     this.set(STORAGE_KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS);
     this.set(STORAGE_KEYS.CURRENT_BATCH_ID, null);
   }
+
+  // Clear all operational data (orders, batches, customers, products, payments) safely for a clean pull from Google Sheets
+  public clearOperationalDataForFreshSync(): void {
+    try {
+      this.createSnapshot(
+        'BEFORE_CLEAR_LOCAL' as any,
+        'Tự động sao lưu an toàn trước khi xóa sạch dữ liệu local để kéo từ Google Sheets'
+      );
+    } catch (e) {
+      console.warn('Không thể tạo bản sao lưu trước khi dọn local:', e);
+    }
+
+    this.set(STORAGE_KEYS.ORDERS, []);
+    this.set(STORAGE_KEYS.BATCHES, []);
+    this.set(STORAGE_KEYS.CUSTOMERS, []);
+    this.set(STORAGE_KEYS.PRODUCTS, []);
+    this.set(STORAGE_KEYS.PAYMENTS, []);
+    this.set(STORAGE_KEYS.AUDIT_LOGS, []);
+    this.set(STORAGE_KEYS.CURRENT_BATCH_ID, null);
+  }
+
+  // Wipe entire local storage while preserving essential auth/sync tokens
+  public clearEntireLocalStorage(preserveTokens = true): void {
+    try {
+      this.createSnapshot(
+        'MANUAL_WIPE' as any,
+        'Tự động sao lưu an toàn trước khi xóa sạch toàn bộ dữ liệu cục bộ'
+      );
+    } catch (e) {
+      // ignore
+    }
+
+    const preservedTokensMap: Record<string, string | null> = {};
+    const tokensToPreserve = [
+      'google_access_token',
+      'google_token_saved_at',
+      'seafood_sheets_spreadsheet_id',
+      'seafood_sheets_spreadsheet_url',
+      'github_personal_access_token',
+    ];
+
+    if (preserveTokens) {
+      for (const t of tokensToPreserve) {
+        preservedTokensMap[t] = localStorage.getItem(t);
+      }
+    }
+
+    // Remove all app-related storage keys
+    Object.values(STORAGE_KEYS).forEach((key) => {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // ignore
+      }
+    });
+
+    // Re-store preserved auth tokens
+    if (preserveTokens) {
+      for (const t of tokensToPreserve) {
+        if (preservedTokensMap[t] !== null) {
+          localStorage.setItem(t, preservedTokensMap[t]!);
+        }
+      }
+    }
+
+    // Initialize clean defaults
+    this.set(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+    this.set(STORAGE_KEYS.PRODUCTS, []);
+    this.set(STORAGE_KEYS.CUSTOMERS, []);
+    this.set(STORAGE_KEYS.BATCHES, []);
+    this.set(STORAGE_KEYS.ORDERS, []);
+    this.set(STORAGE_KEYS.PAYMENTS, []);
+    this.set(STORAGE_KEYS.AUDIT_LOGS, []);
+    this.set(STORAGE_KEYS.CURRENT_BATCH_ID, null);
+  }
 }
 
 export const storage = new StorageService();

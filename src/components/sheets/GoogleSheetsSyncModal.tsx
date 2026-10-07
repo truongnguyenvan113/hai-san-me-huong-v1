@@ -24,6 +24,9 @@ import {
   Key,
   HelpCircle,
   Search,
+  Trash2,
+  AlertTriangle,
+  Flame,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
@@ -69,6 +72,8 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     setSpreadsheetInfo,
     triggerSyncNow,
     pullFromSheets,
+    cleanPullFromSheets,
+    clearAllLocalData,
     refreshData,
     repairAndHealLocalData,
     forceTwoWaySync,
@@ -79,12 +84,20 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
+  const [isCleanPulling, setIsCleanPulling] = useState(false);
   const [isCreatingSheet, setIsCreatingSheet] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [healthReport, setHealthReport] = useState(() => getLocalDataHealth());
   const [isHealing, setIsHealing] = useState(false);
   const [healNotice, setHealNotice] = useState<string | null>(null);
+
+  const [showConfirmSync, setShowConfirmSync] = useState(false);
+  const [showConfirmPull, setShowConfirmPull] = useState(false);
+  const [showConfirmCleanPull, setShowConfirmCleanPull] = useState(false);
+  const [showConfirmClearLocal, setShowConfirmClearLocal] = useState(false);
+  const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
+  const [showTroubleshootGuide, setShowTroubleshootGuide] = useState(false);
 
   const handleRepairLocal = () => {
     setIsHealing(true);
@@ -117,12 +130,62 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     }
   };
 
+  const handleCleanPull = async () => {
+    let targetId = spreadsheetId;
+    if (manualInputId.trim()) {
+      let cleanId = manualInputId.trim();
+      const match = cleanId.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (match && match[1]) cleanId = match[1];
+      targetId = cleanId;
+      setSpreadsheetInfo(cleanId, `https://docs.google.com/spreadsheets/d/${cleanId}/edit`);
+    }
+
+    if (!targetId) {
+      setShowManualInput(true);
+      addToast({
+        type: 'WARNING',
+        title: 'Chưa có Google Sheets',
+        message: 'Vui lòng dán link hoặc ID Google Sheet của bạn để nạp dữ liệu sạch.',
+      });
+      return;
+    }
+
+    setIsCleanPulling(true);
+    setErrorMessage(null);
+    setShowConfirmCleanPull(false);
+
+    try {
+      const stats = await cleanPullFromSheets(targetId);
+      if (stats) {
+        setHealthReport(getLocalDataHealth());
+        addToast({
+          type: 'SUCCESS',
+          title: 'Đã dọn sạch local & nạp mới thành công!',
+          message: `Dữ liệu chuẩn chỉ từ Google Sheets: ${stats.batchesCount} đợt gom, ${stats.ordersCount} đơn hàng, ${stats.customersCount} cư dân.`,
+        });
+      }
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message || 'Lỗi khi xóa và nạp từ Sheets');
+    } finally {
+      setIsCleanPulling(false);
+    }
+  };
+
+  const handleClearLocalData = () => {
+    setShowConfirmClearLocal(false);
+    clearAllLocalData(true);
+    setHealthReport(getLocalDataHealth());
+    addToast({
+      type: 'INFO',
+      title: 'Đã dọn sạch Local Storage',
+      message: 'Dữ liệu cục bộ trên máy đã trắng tinh. Bạn có thể bấm "Nạp Dữ Liệu Từ Sheets" để kéo data chuẩn về.',
+    });
+  };
+
   const [manualInputId, setManualInputId] = useState('');
   const [showManualInput, setShowManualInput] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [showConfirmSync, setShowConfirmSync] = useState(false);
-  const [showConfirmPull, setShowConfirmPull] = useState(false);
-  const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
   // Drive search state
   const [driveSheets, setDriveSheets] = useState<Array<{ id: string; name: string; url: string; modifiedTime?: string }>>([]);
@@ -1140,6 +1203,104 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
             </div>
           </div>
 
+          {/* Dedicated Clean Slate Pull & Local Wipe Tool */}
+          <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-md space-y-4">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30">
+                  <Flame className="w-5 h-5 text-rose-400" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-white flex items-center gap-2">
+                    Xóa Sạch Local & Kéo Data Từ Google Sheets
+                    <span className="px-2 py-0.5 text-[10px] bg-rose-500/20 text-rose-300 rounded-md border border-rose-500/30 font-mono">
+                      Clean Slate Pull
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Giải pháp tốt nhất khi vừa pull code về máy mới hoặc gặp lỗi xung đột cache dữ liệu
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowTroubleshootGuide(!showTroubleshootGuide)}
+                className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 hover:underline cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5" />
+                {showTroubleshootGuide ? 'Đóng hướng dẫn' : 'Xem nguyên nhân lỗi'}
+              </button>
+            </div>
+
+            <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
+              <p>
+                Khi bạn <b>pull code mới về máy</b>, trình duyệt ở local có thể vẫn còn lưu dữ liệu cũ/lệch hoặc chưa liên kết đúng token Google.
+                Tính năng này sẽ thực hiện 3 bước chuẩn chỉnh:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] pt-1">
+                <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/60">
+                  <div className="font-bold text-emerald-400 mb-1">1. Tự động Snapshot</div>
+                  <div className="text-slate-400">Sao lưu an toàn toàn bộ dữ liệu hiện tại trước khi thực hiện để không sợ mất dữ liệu.</div>
+                </div>
+                <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/60">
+                  <div className="font-bold text-amber-400 mb-1">2. Dọn sạch Local</div>
+                  <div className="text-slate-400">Xóa trắng sạch cache đơn hàng, đợt gom, cư dân cũ trên trình duyệt máy bạn.</div>
+                </div>
+                <div className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/60">
+                  <div className="font-bold text-teal-300 mb-1">3. Nạp 100% từ Sheets</div>
+                  <div className="text-slate-400">Đọc trực tiếp từ tệp Google Sheet của bạn và tạo mới lại bảng dữ liệu chuẩn chỉ.</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Troubleshooting Guide Toggle */}
+            {showTroubleshootGuide && (
+              <div className="p-3.5 bg-slate-950/90 border border-slate-700 rounded-xl text-xs space-y-2.5 text-slate-300 animate-fadeIn">
+                <div className="font-bold text-amber-400 flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-400" />
+                  Tại sao vừa pull code về máy thì việc đồng bộ Google Sheets bị lỗi?
+                </div>
+                <ul className="list-disc list-inside space-y-1.5 text-[11px] text-slate-300">
+                  <li>
+                    <b className="text-white">Chưa kết nối tài khoản Google trên máy mới:</b> Mã chứng thực Google OAuth chỉ được lưu trong trình duyệt cục bộ của từng máy. Hãy bấm <b>"Đăng nhập Google"</b> ở góc trên hoặc dùng nút <b>"Nhập mã Access Token thủ công"</b>.
+                  </li>
+                  <li>
+                    <b className="text-white">Chưa liên kết link Google Sheets:</b> Trên máy mới, localStorage chưa biết file Sheet nào của bạn. Hãy bấm <b>"Liên Kết Bảng Tính Đã Có"</b> và dán link sheet của bạn vào.
+                  </li>
+                  <li>
+                    <b className="text-white">Quyền Editor trên Google Sheet:</b> Hãy chắc chắn tài khoản Google bạn đang dùng có quyền <b>"Chỉnh sửa (Editor)"</b> trên file bảng tính đó.
+                  </li>
+                  <li>
+                    <b className="text-white">Lỗi xung đột cache local:</b> Bấm ngay nút <b>"Xóa Sạch Local & Kéo Dữ Liệu Từ Sheets"</b> bên dưới để làm mới hoàn toàn!
+                  </li>
+                </ul>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowConfirmCleanPull(true)}
+                disabled={isCleanPulling || isSyncing || isPulling}
+                className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-700 text-white font-black text-xs rounded-xl shadow-md transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+              >
+                <Flame className={`w-4 h-4 ${isCleanPulling ? 'animate-bounce' : ''}`} />
+                {isCleanPulling ? 'Đang xóa sạch & nạp từ Sheets...' : '🔥 Xóa Sạch Local & Kéo Dữ Liệu Từ Sheets'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowConfirmClearLocal(true)}
+                disabled={isCleanPulling || isSyncing || isPulling}
+                className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs rounded-xl border border-slate-700 transition-colors cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                Xóa Trắng Data Local (Bắt Đầu Mới)
+              </button>
+            </div>
+          </div>
+
           {/* Section 3: Structure of 7 Sheet Tabs */}
           <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-xs">
             <span className="text-xs font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5 mb-3">
@@ -1357,6 +1518,75 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                 className="flex items-center gap-1 px-4 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs shadow-xs cursor-pointer"
               >
                 <ShieldCheck className="w-3.5 h-3.5" /> Đồng bộ về máy & Ngắt kết nối
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Confirmation Dialog for Clean Slate Pull */}
+        {showConfirmCleanPull && (
+          <div className="p-4 bg-rose-50 border-t border-rose-200 space-y-3 animate-fadeIn">
+            <div className="flex items-start gap-2.5 text-xs text-rose-950">
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold text-sm text-rose-900">
+                  Xác nhận xóa sạch Local & Kéo mới từ Google Sheets:
+                </div>
+                <div className="mt-1 leading-relaxed">
+                  Hệ thống sẽ <b>tự động tạo 1 bản Snapshot sao lưu</b> để bảo vệ dữ liệu, sau đó <b>xóa sạch toàn bộ đơn hàng, đợt gom và danh bạ hiện có trên máy</b> để nạp mới 100% dữ liệu từ tệp Google Sheet của bạn.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowConfirmCleanPull(false)}
+                className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs border border-slate-300 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleCleanPull}
+                disabled={isCleanPulling}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs shadow-sm cursor-pointer"
+              >
+                <Flame className="w-4 h-4" /> Đồng ý xóa sạch & Kéo mới từ Sheets
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Confirmation Dialog for Clear Local Data */}
+        {showConfirmClearLocal && (
+          <div className="p-4 bg-slate-100 border-t border-slate-300 space-y-3 animate-fadeIn">
+            <div className="flex items-start gap-2.5 text-xs text-slate-800">
+              <Trash2 className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold text-sm text-slate-900">
+                  Xác nhận dọn sạch toàn bộ Local Storage:
+                </div>
+                <div className="mt-1 leading-relaxed text-slate-600">
+                  Thao tác này sẽ dọn sạch toàn bộ dữ liệu đơn hàng, đợt gom, cư dân trên trình duyệt này (vẫn giữ lại token kết nối Google và GitHub). Một bản Snapshot sao lưu an toàn sẽ được tự động tạo trước khi dọn.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowConfirmClearLocal(false)}
+                className="px-3.5 py-1.5 bg-white hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs border border-slate-300 cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleClearLocalData}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-sm cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" /> Dọn sạch Local Storage ngay
               </button>
             </div>
           </div>

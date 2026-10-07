@@ -55,6 +55,19 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}): Prom
         ...options.headers,
       },
     });
+
+    // If proxy route returns 404/500/502 (e.g. running in pure Vite without server proxy or temporary proxy issue), fallback to direct Google API call
+    if (!res.ok && (res.status === 404 || res.status === 502 || res.status === 500)) {
+      console.warn(`[Google Sheets] Proxy returned HTTP ${res.status}, falling back to direct Google API call...`);
+      res = await fetch(directUrl, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...options.headers,
+        },
+      });
+    }
   } catch (proxyError: any) {
     console.warn('[Google Sheets] Proxy call failed, attempting direct fetch:', proxyError?.message);
     try {
@@ -1632,6 +1645,21 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     settingsRestored,
     restoredAt: now,
   };
+}
+
+// 7. CLEAN SLATE PULL: Completely wipe local operational cache and pull 100% fresh mirror from Google Sheets
+export async function cleanPullAndRestoreFromGoogleSheets(spreadsheetId: string): Promise<RestoreStats> {
+  if (!spreadsheetId) {
+    throw new Error('Chưa cung cấp ID tệp Google Sheets để nạp dữ liệu');
+  }
+
+  // 1. Wipe operational data locally first (creating safety backup)
+  storage.clearOperationalDataForFreshSync();
+
+  // 2. Pull all sheets data fresh from Google Sheets
+  const stats = await pullAndRestoreFromGoogleSheets(spreadsheetId);
+
+  return stats;
 }
 
 // 7. Direct Settings Export & Import helpers
