@@ -620,7 +620,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         clearTimeout(syncTimeoutRef.current);
       }
     };
-  }, [orders, batches, customers, products, payments, autoSyncEnabled]);
+  }, [orders, batches, customers, products, payments, units, categories, autoSyncEnabled]);
 
   const currentBatch = batches.find((b) => b.batch_id === (selectedBatchId || storage.getCurrentBatchId())) || batches[0] || null;
 
@@ -662,6 +662,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.addUnit(unitName);
     setUnits([...updated]);
     addToast('success', 'Đã thêm đơn vị tính', `Đơn vị mới: ${unitName}`);
+    executeAutoSync(true);
   };
 
   const updateUnit = (oldUnit: string, newUnit: string) => {
@@ -676,18 +677,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.deleteUnit(unitName);
     setUnits([...updated]);
     addToast('info', 'Đã xóa đơn vị tính', `Đã xóa: ${unitName}`);
+    executeAutoSync(true);
   };
 
   const resetUnitsToDefault = () => {
     const updated = storage.resetUnits();
     setUnits([...updated]);
     addToast('info', 'Đã khôi phục đơn vị mặc định', 'Đã đặt lại danh sách ĐVT ban đầu');
+    executeAutoSync(true);
   };
 
   const addCategory = (cat: string) => {
     const updated = storage.addCategory(cat);
     setCategories([...updated]);
     addToast('success', 'Đã thêm danh mục mới', `Danh mục: ${cat.trim()}`);
+    executeAutoSync(true);
   };
 
   const updateCategory = (oldCat: string, newCat: string) => {
@@ -695,18 +699,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCategories([...updated]);
     setProducts(storage.getProducts());
     addToast('success', 'Đã cập nhật danh mục', `${oldCat} → ${newCat}`);
+    executeAutoSync(true);
   };
 
   const deleteCategory = (catName: string) => {
     const updated = storage.deleteCategory(catName);
     setCategories([...updated]);
     addToast('info', 'Đã xóa danh mục', `Đã xóa: ${catName}`);
+    executeAutoSync(true);
   };
 
   const resetCategoriesToDefault = () => {
     const updated = storage.resetCategories();
     setCategories([...updated]);
     addToast('info', 'Đã khôi phục danh mục mặc định', 'Đã đặt lại danh sách danh mục ban đầu');
+    executeAutoSync(true);
   };
 
   const addCustomer = (customer: Customer) => {

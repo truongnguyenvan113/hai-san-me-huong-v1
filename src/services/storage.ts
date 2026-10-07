@@ -36,25 +36,31 @@ export const DEFAULT_CATEGORIES: string[] = [
   'Cá biển',
   'Mực',
   'Ốc & Ngao',
-  'Đồ khô & Chế biến',
+  'Hàu & Sò',
+  'Chả cá & Đồ chế biến',
+  'Đồ khô & Một nắng',
+  'Gia vị & Khác',
   'Khác',
 ];
 
 export const DEFAULT_UNITS: string[] = [
+  'Kg',
+  'Hộp',
+  'Khay',
+  'Con',
+  'Chai',
+  'Lon',
+  'Bịch',
+  'Thùng',
+  'Túi',
+  'Gói',
+  'Gram',
+  'Phần',
+  'Combo',
+  'Rế',
+  'Xù',
+  'Vỉ',
   'kg',
-  'hộp',
-  'khay',
-  'con',
-  'chai',
-  'lon',
-  'túi',
-  'bịch',
-  'gram',
-  'thùng',
-  'phần',
-  'combo',
-  'rế',
-  'xù',
 ];
 
 export const DEFAULT_SETTINGS: StoreSettings = {
@@ -1772,6 +1778,8 @@ class StorageService {
 
     // Initialize clean defaults
     this.set(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+    this.set(STORAGE_KEYS.UNITS, DEFAULT_UNITS);
+    this.set(STORAGE_KEYS.CATEGORIES, DEFAULT_CATEGORIES);
     this.set(STORAGE_KEYS.PRODUCTS, []);
     this.set(STORAGE_KEYS.CUSTOMERS, []);
     this.set(STORAGE_KEYS.BATCHES, []);

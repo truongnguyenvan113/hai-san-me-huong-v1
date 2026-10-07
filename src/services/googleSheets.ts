@@ -786,7 +786,9 @@ export function prepareSheetData(
       o.delivery_note || o.note || '',
     ]);
 
-  // Tab 7: Cấu Hình Hệ Thống (Store Settings & 2-Bank Account Config)
+  // Tab 7: Cấu Hình Hệ Thống (Store Settings, Bank Accounts, Units, Categories)
+  const currentUnits = storage.getUnits();
+  const currentCategories = storage.getCategories();
   const settingsHeader = ['Mã Cấu Hình / Thuộc Tính', 'Giá Trị Thiết Lập', 'Mô Tả & Hướng Dẫn Nghiệp Vụ'];
   const settingsRows = [
     ['STORE_NAME', settings.store_name || '', 'Tên cửa hàng hải sản hiển thị trên phiếu in & tiêu đề'],
@@ -809,6 +811,8 @@ export function prepareSheetData(
     ['SHOW_VIETQR', String(settings.show_vietqr !== false), 'Bật / Tắt tạo và in mã VietQR tự động (true / false)'],
     ['INVOICE_FOOTER_NOTE', settings.invoice_footer_note || '', 'Ghi chú dặn dò bảo quản ở chân phiếu in dán bao bì'],
     ['SLOGAN', settings.slogan || '', 'Khẩu hiệu bán hàng'],
+    ['UNITS_LIST', currentUnits.join('; '), 'Danh sách Đơn vị tính (Kg, Hộp, Khay, Con, Chai, Lon, Bịch, Thùng...)'],
+    ['CATEGORIES_LIST', currentCategories.join('; '), 'Danh sách Danh mục hải sản (Tôm, Cua, Ghẹ, Cá biển, Mực, Ốc & Ngao...)'],
     ['DEFAULT_SHIPPING_FEE', String(settings.default_shipping_fee || 0), 'Phí ship nội bộ chung cư mặc định (VNĐ)'],
     ['LAST_SYNC_TIME', new Date().toISOString(), 'Thời gian sao lưu cấu hình lên Google Sheets'],
   ];
@@ -1132,6 +1136,32 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
 
     storage.saveSettings(restoredSettings as StoreSettings);
     settingsRestored = true;
+
+    // Restore and merge Units from Google Sheets config
+    if (configMap['UNITS_LIST']) {
+      const unitsFromSheet = configMap['UNITS_LIST']
+        .split(/[;,]/)
+        .map((u) => u.trim())
+        .filter(Boolean);
+      if (unitsFromSheet.length > 0) {
+        const currentU = storage.getUnits();
+        const mergedU = Array.from(new Set([...currentU, ...unitsFromSheet]));
+        storage.saveUnits(mergedU);
+      }
+    }
+
+    // Restore and merge Categories from Google Sheets config
+    if (configMap['CATEGORIES_LIST']) {
+      const catsFromSheet = configMap['CATEGORIES_LIST']
+        .split(/[;,]/)
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (catsFromSheet.length > 0) {
+        const currentC = storage.getCategories();
+        const mergedC = Array.from(new Set([...currentC, ...catsFromSheet]));
+        storage.saveCategories(mergedC);
+      }
+    }
   }
 
   // ----------------------------------------------------
@@ -1688,6 +1718,18 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
 
   if (restoredProducts.length > 0) {
     storage.saveProducts(restoredProducts);
+
+    // Harvest and merge unique categories and units from restored products on Google Sheets
+    const prodCats = restoredProducts.map((p) => (p.category || '').trim()).filter(Boolean);
+    const prodUnits = restoredProducts.map((p) => (p.unit || '').trim()).filter(Boolean);
+    if (prodCats.length > 0) {
+      const mergedCats = Array.from(new Set([...storage.getCategories(), ...prodCats]));
+      storage.saveCategories(mergedCats);
+    }
+    if (prodUnits.length > 0) {
+      const mergedUnits = Array.from(new Set([...storage.getUnits(), ...prodUnits]));
+      storage.saveUnits(mergedUnits);
+    }
   } else if (hasProductsTab && productsRows.length <= 1) {
     // If sheet tab is present but explicitly empty, keep existing to prevent accidental total wipe
     console.info('[Google Sheets] Products tab empty on sheets, keeping current products catalog.');
