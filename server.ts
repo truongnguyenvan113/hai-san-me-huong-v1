@@ -338,7 +338,20 @@ async function startServer() {
 
       const prefix = '/api/google-proxy/sheets';
       const rawUrl = req.originalUrl || req.url;
-      const pathAndQuery = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) : '';
+      let pathAndQuery = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) : '';
+
+      // If the client inadvertently passed a full Google Sheet URL inside the path:
+      if (pathAndQuery.includes('http') || pathAndQuery.includes('spreadsheets/d/')) {
+        const urlMatch =
+          pathAndQuery.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/i) ||
+          pathAndQuery.match(/\/d\/([a-zA-Z0-9-_]+)/i);
+        if (urlMatch && urlMatch[1]) {
+          const queryPart = pathAndQuery.includes('?') ? pathAndQuery.slice(pathAndQuery.indexOf('?')) : '';
+          const actionPart = pathAndQuery.includes(':') ? pathAndQuery.slice(pathAndQuery.indexOf(':')) : '';
+          pathAndQuery = `/${urlMatch[1]}${actionPart || queryPart}`;
+        }
+      }
+
       const targetUrl = `https://sheets.googleapis.com/v4/spreadsheets${pathAndQuery}`;
 
       const headers: Record<string, string> = {
@@ -363,7 +376,18 @@ async function startServer() {
         return res.status(googleRes.status).json(data);
       } else {
         const text = await googleRes.text().catch(() => '');
-        return res.status(googleRes.status).send(text);
+        const cleanMessage = text
+          .replace(/<title>(.*?)<\/title>/gi, '$1')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 300);
+        return res.status(googleRes.status).json({
+          error: {
+            code: googleRes.status,
+            message: cleanMessage || `Google Sheets API phản hồi trạng thái ${googleRes.status}`,
+          },
+        });
       }
     } catch (err: any) {
       console.error('[Google Proxy Sheets] Lỗi chuyển tiếp yêu cầu:', err);
@@ -410,7 +434,18 @@ async function startServer() {
         return res.status(googleRes.status).json(data);
       } else {
         const text = await googleRes.text().catch(() => '');
-        return res.status(googleRes.status).send(text);
+        const cleanMessage = text
+          .replace(/<title>(.*?)<\/title>/gi, '$1')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 300);
+        return res.status(googleRes.status).json({
+          error: {
+            code: googleRes.status,
+            message: cleanMessage || `Google Drive API phản hồi trạng thái ${googleRes.status}`,
+          },
+        });
       }
     } catch (err: any) {
       console.error('[Google Proxy Drive] Lỗi chuyển tiếp yêu cầu:', err);
@@ -426,10 +461,12 @@ async function startServer() {
   // Helper to ensure Git repository is safely initialized
   const ensureGitRepo = async (): Promise<boolean> => {
     try {
+      const repoName = 'truongnguyenvan113/hai-san-me-huong-v1';
       if (!fs.existsSync(path.join(process.cwd(), '.git'))) {
         await execAsync('git init -b main');
         await execAsync('git config user.name "AI Studio"');
         await execAsync('git config user.email "aistudio@google.com"');
+        await execAsync(`git remote add origin "https://github.com/${repoName}.git"`);
       } else {
         try {
           const { stdout: currentB } = await execAsync('git rev-parse --abbrev-ref HEAD');
@@ -440,6 +477,23 @@ async function startServer() {
           // ignore
         }
       }
+
+      // Check if .github_token file exists to automatically configure authed origin
+      const tokenPath = path.join(process.cwd(), '.github_token');
+      if (fs.existsSync(tokenPath)) {
+        try {
+          const savedToken = fs.readFileSync(tokenPath, 'utf-8').trim();
+          if (savedToken) {
+            const authedUrl = `https://${savedToken}@github.com/${repoName}.git`;
+            try {
+              await execAsync(`git remote set-url origin "${authedUrl}"`);
+            } catch {
+              await execAsync(`git remote add origin "${authedUrl}"`);
+            }
+          }
+        } catch {}
+      }
+
       return true;
     } catch (err: any) {
       console.warn('[Git Init] Notice:', err?.message);
@@ -508,7 +562,23 @@ async function startServer() {
       await ensureGitRepo();
       const { message, token } = req.body || {};
       const repoName = 'truongnguyenvan113/hai-san-me-huong-v1';
-      const authToken = (token || process.env.GITHUB_TOKEN || '').trim();
+      
+      const tokenPath = path.join(process.cwd(), '.github_token');
+      let savedToken = '';
+      if (fs.existsSync(tokenPath)) {
+        try {
+          savedToken = fs.readFileSync(tokenPath, 'utf-8').trim();
+        } catch {}
+      }
+
+      const authToken = (token || process.env.GITHUB_TOKEN || savedToken || '').trim();
+
+      // Persist token if newly provided
+      if (token && token.trim()) {
+        try {
+          fs.writeFileSync(tokenPath, token.trim(), 'utf-8');
+        } catch {}
+      }
 
       // Ensure branch is main
       try {

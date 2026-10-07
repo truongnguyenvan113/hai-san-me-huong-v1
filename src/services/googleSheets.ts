@@ -32,7 +32,59 @@ export const SHEET_NAMES = {
   SETTINGS: 'Cấu Hình Hệ Thống',
 };
 
-// Helper: Make authenticated request to Google Sheets API
+// Helper: Extract & sanitize clean spreadsheet ID from full URL, partial URL, or raw ID
+export function extractSpreadsheetId(rawInput: string): string {
+  if (!rawInput) return '';
+  const trimmed = rawInput.trim();
+
+  // 1. If full Google Sheets URL: e.g. https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit#gid=0
+  const urlMatch =
+    trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/i) ||
+    trimmed.match(/\/d\/([a-zA-Z0-9-_]+)/i);
+  if (urlMatch && urlMatch[1]) {
+    return urlMatch[1].trim();
+  }
+
+  // 2. Remove URL artifacts, query params, hashes, and /edit suffixes
+  let cleaned = trimmed.split('?')[0].split('#')[0];
+  cleaned = cleaned.replace(/\/edit\/?$/i, '').replace(/^\/+|\/+$/g, '').trim();
+
+  // 3. If string still has path slashes, look for an alphanumeric candidate ID of sufficient length
+  if (cleaned.includes('/')) {
+    const parts = cleaned.split('/');
+    const candidate = parts.find((p) => p.length > 20 && !p.includes('.'));
+    if (candidate) return candidate.trim();
+  }
+
+  return cleaned;
+}
+
+// Helper: Safely inspect response to detect HTML pages (Vite SPA index.html or Google HTML error pages)
+async function parseResponseSafely(res: Response): Promise<{ isHtml: boolean; data: any; rawText: string }> {
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  const rawText = await res.text().catch(() => '');
+  const trimmed = rawText.trim();
+  const isHtml =
+    contentType.includes('text/html') ||
+    trimmed.startsWith('<!doctype') ||
+    trimmed.startsWith('<!DOCTYPE') ||
+    trimmed.startsWith('<html') ||
+    trimmed.startsWith('<HTML') ||
+    (trimmed.startsWith('<') && trimmed.includes('</'));
+
+  if (isHtml) {
+    return { isHtml: true, data: null, rawText };
+  }
+
+  try {
+    const data = JSON.parse(rawText);
+    return { isHtml: false, data, rawText };
+  } catch {
+    return { isHtml: false, data: null, rawText };
+  }
+}
+
+// Helper: Make authenticated request to Google Sheets API with robust direct/proxy dual-fallback
 async function fetchSheetsApi(endpoint: string, options: RequestInit = {}): Promise<any> {
   const token = await getAccessToken();
 
@@ -40,14 +92,36 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}): Prom
     throw new Error('Chưa đăng nhập Google hoặc phiên đăng nhập đã hết hạn. Vui lòng nhấn "Đăng nhập Google" để tiếp tục.');
   }
 
-  // Use same-origin proxy to eliminate browser CORS and iframe sandbox restrictions
-  const proxyUrl = `/api/google-proxy/sheets${endpoint}`;
-  const directUrl = `https://sheets.googleapis.com/v4/spreadsheets${endpoint}`;
+  // Sanitize endpoint if it contains an un-extracted spreadsheet ID or full URL
+  let safeEndpoint = endpoint;
+  if (safeEndpoint.startsWith('/')) {
+    const segments = safeEndpoint.slice(1).split(/[/?#:]/);
+    const candidateId = segments[0];
+    if (candidateId && (candidateId.includes('http') || candidateId.includes('spreadsheets') || candidateId.length > 15)) {
+      const cleaned = extractSpreadsheetId(candidateId);
+      if (cleaned && cleaned !== candidateId) {
+        safeEndpoint = safeEndpoint.replace(`/${candidateId}`, `/${cleaned}`);
+      }
+    }
+  }
 
-  let res: Response;
-  try {
-    // 1. Primary: Use same-origin server proxy (100% reliable inside browser iFrame)
-    res = await fetch(proxyUrl, {
+  // Detect execution environment: on localhost/local dev, direct Google API works natively without depending on proxy
+  const isLocalhost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname.startsWith('192.168.'));
+
+  const directUrl = `https://sheets.googleapis.com/v4/spreadsheets${safeEndpoint}`;
+  const proxyUrl = `/api/google-proxy/sheets${safeEndpoint}`;
+
+  // Preferred order: on localhost use direct Google Sheets API first (no missing proxy issue);
+  // in hosted/preview iframe use proxy first, then fallback to direct
+  const primaryUrl = isLocalhost ? directUrl : proxyUrl;
+  const fallbackUrl = isLocalhost ? proxyUrl : directUrl;
+
+  const executeCall = async (url: string) => {
+    const res = await fetch(url, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -55,60 +129,73 @@ async function fetchSheetsApi(endpoint: string, options: RequestInit = {}): Prom
         ...options.headers,
       },
     });
+    const parsed = await parseResponseSafely(res);
+    return { ok: res.ok, status: res.status, parsed };
+  };
 
-    // If proxy route returns 404/500/502 (e.g. running in pure Vite without server proxy or temporary proxy issue), fallback to direct Google API call
-    if (!res.ok && (res.status === 404 || res.status === 502 || res.status === 500)) {
-      console.warn(`[Google Sheets] Proxy returned HTTP ${res.status}, falling back to direct Google API call...`);
-      res = await fetch(directUrl, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...options.headers,
-        },
-      });
+  let executionResult: { ok: boolean; status: number; parsed: { isHtml: boolean; data: any; rawText: string } } | null = null;
+
+  try {
+    executionResult = await executeCall(primaryUrl);
+    // If the response is an HTML document (e.g. Vite SPA index.html fallback) or server 404/502/500, try the fallback URL
+    if (
+      executionResult.parsed.isHtml ||
+      (!executionResult.ok && (executionResult.status === 404 || executionResult.status === 502 || executionResult.status === 500))
+    ) {
+      console.warn(`[Google Sheets] Primary call to ${primaryUrl} returned ${executionResult.status} (isHtml: ${executionResult.parsed.isHtml}). Attempting fallback to ${fallbackUrl}...`);
+      const fallbackResult = await executeCall(fallbackUrl).catch(() => null);
+      if (fallbackResult && !fallbackResult.parsed.isHtml) {
+        executionResult = fallbackResult;
+      }
     }
-  } catch (proxyError: any) {
-    console.warn('[Google Sheets] Proxy call failed, attempting direct fetch:', proxyError?.message);
+  } catch (primaryErr: any) {
+    console.warn(`[Google Sheets] Primary call failed (${primaryErr?.message}), trying fallback to ${fallbackUrl}...`);
     try {
-      // 2. Fallback: Try direct call if proxy route fails to respond
-      res = await fetch(directUrl, {
-        ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...options.headers,
-        },
-      });
-    } catch (networkError: any) {
-      console.error('Network error during Google Sheets API call:', networkError);
+      executionResult = await executeCall(fallbackUrl);
+    } catch (fallbackErr: any) {
+      console.error('Failed both primary and fallback Google Sheets calls:', fallbackErr);
       throw new Error(
-        'Không thể kết nối đến Google Sheets (Lỗi mạng hoặc bị chặn kết nối). Vui lòng kiểm tra đường truyền hoặc thử đăng nhập lại Google.'
+        `Không thể kết nối đến Google Sheets (Lỗi mạng hoặc bị chặn kết nối): ${fallbackErr?.message || primaryErr?.message}`
       );
     }
   }
 
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    const message = errorData?.error?.message || `HTTP error ${res.status}: ${res.statusText}`;
+  if (!executionResult) {
+    throw new Error('Không nhận được phản hồi từ dịch vụ Google Sheets');
+  }
 
-    // Handle expired or invalid access token
+  // Handle case where response is still HTML
+  if (executionResult.parsed.isHtml) {
+    throw new Error(
+      `Google API trả về nội dung HTML thay vì dữ liệu JSON (Mã trạng thái ${executionResult.status}). Vui lòng kiểm tra lại link Google Sheets của bạn và đảm bảo tài khoản có quyền "Người chỉnh sửa" (Editor).`
+    );
+  }
+
+  // Handle HTTP error codes
+  if (!executionResult.ok) {
+    const errorData = executionResult.parsed.data;
+    const message = errorData?.error?.message || `HTTP ${executionResult.status}`;
+
     const isAuthError =
-      res.status === 401 ||
-      res.status === 403 ||
+      executionResult.status === 401 ||
+      executionResult.status === 403 ||
       errorData?.error?.status === 'UNAUTHENTICATED' ||
       message.toLowerCase().includes('authentication credentials') ||
       message.toLowerCase().includes('invalid credentials');
 
     if (isAuthError) {
       setAccessTokenInMemory(null);
-      throw new Error('Phiên đăng nhập Google đã hết hạn hoặc mã xác thực không hợp lệ. Vui lòng nhấn "Đăng nhập lại" để làm mới phiên.');
+      throw new Error('Phiên đăng nhập Google đã hết hạn hoặc chưa có quyền truy cập tệp Sheet này. Vui lòng bấm "Đăng nhập lại" để cấp quyền.');
+    }
+
+    if (executionResult.status === 404 || message.toLowerCase().includes('not found')) {
+      throw new Error('Không tìm thấy tệp Google Sheet với ID này. Vui lòng kiểm tra lại ID hoặc liên kết bảng tính đã kết nối.');
     }
 
     throw new Error(`Lỗi Google Sheets API: ${message}`);
   }
 
-  return res.json();
+  return executionResult.parsed.data;
 }
 
 // Helper: Search for existing seafood spreadsheet in Google Drive to prevent duplicates
@@ -119,32 +206,39 @@ export async function searchSpreadsheetsOnDrive(
   if (!token) return [];
 
   try {
+    const isLocalhost =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1' ||
+        window.location.hostname.startsWith('192.168.'));
+
     const q = `mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains '${searchQuery.replace(/'/g, "\\'")}'`;
     const queryString = `q=${encodeURIComponent(q)}&fields=files(id,name,modifiedTime,webViewLink)&orderBy=modifiedTime desc&pageSize=10`;
-    const proxyUrl = `/api/google-proxy/drive/files?${queryString}`;
     const directUrl = `https://www.googleapis.com/drive/v3/files?${queryString}`;
-    
-    let res: Response;
-    try {
-      res = await fetch(proxyUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-    } catch {
-      res = await fetch(directUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+    const proxyUrl = `/api/google-proxy/drive/files?${queryString}`;
+
+    const primaryUrl = isLocalhost ? directUrl : proxyUrl;
+    const fallbackUrl = isLocalhost ? proxyUrl : directUrl;
+
+    let res = await fetch(primaryUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => null);
+
+    let parsed = res ? await parseResponseSafely(res) : { isHtml: true, data: null, rawText: '' };
+    if (!res || !res.ok || parsed.isHtml) {
+      res = await fetch(fallbackUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => null);
+      if (res) {
+        parsed = await parseResponseSafely(res);
+      }
     }
 
-    if (!res.ok) {
-      console.warn('Drive API list files status:', res.status);
+    if (!res || !res.ok || parsed.isHtml || !parsed.data) {
       return [];
     }
 
-    const data = await res.json();
+    const data = parsed.data;
     if (data && Array.isArray(data.files)) {
       return data.files.map((f: any) => ({
         id: f.id,
@@ -838,7 +932,7 @@ export async function autoSyncAll(
     return null;
   }
 
-  let spreadsheetId = localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+  let spreadsheetId = extractSpreadsheetId(localStorage.getItem('seafood_sheets_spreadsheet_id') || '');
   let spreadsheetUrl = localStorage.getItem('seafood_sheets_spreadsheet_url') || '';
 
   // If no spreadsheet ID in localStorage (e.g. running on new local/domain), first try searching Google Drive
@@ -847,7 +941,7 @@ export async function autoSyncAll(
       const searchResults = await searchSpreadsheetsOnDrive(options?.title || 'Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư');
       if (searchResults && searchResults.length > 0) {
         // Reuse the existing most recently modified spreadsheet on user's Google Drive
-        spreadsheetId = searchResults[0].id;
+        spreadsheetId = extractSpreadsheetId(searchResults[0].id);
         spreadsheetUrl = searchResults[0].url;
         localStorage.setItem('seafood_sheets_spreadsheet_id', spreadsheetId);
         localStorage.setItem('seafood_sheets_spreadsheet_url', spreadsheetUrl);
@@ -862,7 +956,7 @@ export async function autoSyncAll(
     const created = await createSeafoodSpreadsheet(
       options?.title || 'Hải Sản Mẹ Hường - Quản Lý Gom Đơn Chung Cư'
     );
-    spreadsheetId = created.spreadsheetId;
+    spreadsheetId = extractSpreadsheetId(created.spreadsheetId);
     spreadsheetUrl = created.spreadsheetUrl;
     localStorage.setItem('seafood_sheets_spreadsheet_id', spreadsheetId);
     localStorage.setItem('seafood_sheets_spreadsheet_url', spreadsheetUrl);
@@ -889,12 +983,13 @@ export async function autoSyncAll(
 
 // 6. REVERSE SYNC / PULL MECHANISM (Synchronize backwards from Google Sheets to App)
 export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Promise<RestoreStats> {
-  if (!spreadsheetId) {
-    throw new Error('Chưa cung cấp ID tệp Google Sheets để nạp dữ liệu');
+  const cleanId = extractSpreadsheetId(spreadsheetId);
+  if (!cleanId) {
+    throw new Error('Chưa cung cấp ID tệp Google Sheets hợp lệ để nạp dữ liệu. Vui lòng kiểm tra lại ID hoặc link Google Sheet.');
   }
 
   // 1. Get spreadsheet metadata first to discover existing sheet tabs
-  const meta = await fetchSheetsApi(`/${spreadsheetId}?fields=sheets(properties(sheetId,title,gridProperties))`);
+  const meta = await fetchSheetsApi(`/${cleanId}?fields=sheets(properties(sheetId,title,gridProperties))`);
   const sheetList: Array<{ title: string; sheetId?: number; columnCount?: number; rowCount?: number }> = (meta.sheets || [])
     .map((s: any) => ({
       title: s.properties?.title || '',
@@ -1649,15 +1744,30 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
 
 // 7. CLEAN SLATE PULL: Completely wipe local operational cache and pull 100% fresh mirror from Google Sheets
 export async function cleanPullAndRestoreFromGoogleSheets(spreadsheetId: string): Promise<RestoreStats> {
-  if (!spreadsheetId) {
-    throw new Error('Chưa cung cấp ID tệp Google Sheets để nạp dữ liệu');
+  const cleanId = extractSpreadsheetId(spreadsheetId);
+  if (!cleanId) {
+    throw new Error('Chưa cung cấp ID hoặc liên kết tệp Google Sheets hợp lệ để nạp dữ liệu. Vui lòng kiểm tra lại link Google Sheets.');
   }
 
-  // 1. Wipe operational data locally first (creating safety backup)
+  // 1. Create a safe backup snapshot of existing data BEFORE wiping anything
+  try {
+    storage.createSnapshot(
+      'BEFORE_CLEAR_LOCAL' as any,
+      'Tự động sao lưu an toàn trước khi dọn sạch dữ liệu để kéo từ Google Sheets'
+    );
+  } catch (snapErr) {
+    console.warn('Không thể tạo bản sao lưu trước khi dọn local:', snapErr);
+  }
+
+  // 2. Pre-flight check: Verify that Google Sheet metadata can be fetched BEFORE clearing local data!
+  // This guarantees that if the spreadsheet ID is invalid, 404, or unauthenticated, local data is NOT wiped by mistake!
+  await fetchSheetsApi(`/${cleanId}?fields=sheets(properties(sheetId,title))`);
+
+  // 3. Clear operational data locally now that we confirmed sheet is reachable
   storage.clearOperationalDataForFreshSync();
 
-  // 2. Pull all sheets data fresh from Google Sheets
-  const stats = await pullAndRestoreFromGoogleSheets(spreadsheetId);
+  // 4. Pull all sheets data fresh from Google Sheets
+  const stats = await pullAndRestoreFromGoogleSheets(cleanId);
 
   return stats;
 }

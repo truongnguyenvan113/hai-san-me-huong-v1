@@ -41,6 +41,7 @@ import {
   syncAllToGoogleSheets,
   pullAndRestoreFromGoogleSheets,
   searchSpreadsheetsOnDrive,
+  extractSpreadsheetId,
   SyncStats,
   RestoreStats,
   SHEET_NAMES,
@@ -78,6 +79,8 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     repairAndHealLocalData,
     forceTwoWaySync,
     getLocalDataHealth,
+    snapshots,
+    restoreFromSnapshot,
   } = useApp();
 
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -131,13 +134,13 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   };
 
   const handleCleanPull = async () => {
-    let targetId = spreadsheetId;
+    let targetId = extractSpreadsheetId(spreadsheetId);
     if (manualInputId.trim()) {
-      let cleanId = manualInputId.trim();
-      const match = cleanId.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if (match && match[1]) cleanId = match[1];
-      targetId = cleanId;
-      setSpreadsheetInfo(cleanId, `https://docs.google.com/spreadsheets/d/${cleanId}/edit`);
+      const cleanId = extractSpreadsheetId(manualInputId);
+      if (cleanId) {
+        targetId = cleanId;
+        setSpreadsheetInfo(cleanId, `https://docs.google.com/spreadsheets/d/${cleanId}/edit`);
+      }
     }
 
     if (!targetId) {
@@ -441,11 +444,14 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   const handleLinkExistingSpreadsheet = async () => {
     if (!manualInputId.trim()) return;
 
-    let cleanId = manualInputId.trim();
-    // Extract ID if full URL pasted
-    const match = cleanId.match(/\/d\/([a-zA-Z0-9-_]+)/);
-    if (match && match[1]) {
-      cleanId = match[1];
+    const cleanId = extractSpreadsheetId(manualInputId.trim());
+    if (!cleanId) {
+      addToast({
+        type: 'WARNING',
+        title: 'Đường dẫn không hợp lệ',
+        message: 'Không tìm thấy ID bảng tính hợp lệ trong đường dẫn bạn vừa dán.',
+      });
+      return;
     }
 
     const fullUrl = `https://docs.google.com/spreadsheets/d/${cleanId}/edit`;
@@ -471,7 +477,8 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 
   // Perform sync execution (App -> Sheets)
   const executeSync = async (targetId = spreadsheetId) => {
-    if (!targetId) {
+    const cleanTargetId = extractSpreadsheetId(targetId);
+    if (!cleanTargetId) {
       setErrorMessage('Chưa chọn hoặc chưa tạo Google Sheet để đồng bộ.');
       return;
     }
@@ -482,7 +489,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 
     try {
       const stats = await syncAllToGoogleSheets(
-        targetId,
+        cleanTargetId,
         orders,
         batches,
         customers,
@@ -1299,6 +1306,35 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
                 Xóa Trắng Data Local (Bắt Đầu Mới)
               </button>
             </div>
+
+            {/* Emergency Recovery Banner: If local data is empty but snapshots exist */}
+            {orders.length === 0 && batches.length === 0 && snapshots && snapshots.length > 0 && (
+              <div className="mt-2 p-3 bg-amber-500/15 border border-amber-500/40 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span className="text-xs text-amber-200">
+                    Dữ liệu local đang trống ({snapshots.length} bản sao lưu tự động có sẵn). Bạn có thể khôi phục lại dữ liệu trước khi xóa bất kỳ lúc nào:
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const latest = snapshots[0];
+                    if (latest) {
+                      restoreFromSnapshot(latest);
+                      addToast({
+                        type: 'SUCCESS',
+                        title: 'Đã khôi phục dữ liệu',
+                        message: `Đã khôi phục bản sao lưu lúc ${new Date(latest.timestamp).toLocaleTimeString('vi-VN')}`,
+                      });
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-lg transition-colors shrink-0 cursor-pointer self-start sm:self-auto"
+                >
+                  ↩️ Khôi Phục Bản Sao Lưu Gần Nhất
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Section 3: Structure of 7 Sheet Tabs */}

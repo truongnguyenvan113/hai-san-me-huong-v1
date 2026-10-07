@@ -22,6 +22,7 @@ import {
   exportSettingsToGoogleSheets,
   searchSpreadsheetsOnDrive,
   createSeafoodSpreadsheet,
+  extractSpreadsheetId,
   SyncStats,
   RestoreStats,
 } from '../services/googleSheets';
@@ -234,7 +235,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return localStorage.getItem('seafood_sheets_autosync') !== 'false';
   });
   const [spreadsheetId, setSpreadsheetId] = useState<string>(() => {
-    return localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    return extractSpreadsheetId(localStorage.getItem('seafood_sheets_spreadsheet_id') || '');
   });
   const [spreadsheetUrl, setSpreadsheetUrl] = useState<string>(() => {
     return localStorage.getItem('seafood_sheets_spreadsheet_url') || '';
@@ -310,10 +311,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const setSpreadsheetInfo = (id: string, url: string) => {
-    setSpreadsheetId(id);
-    setSpreadsheetUrl(url);
-    localStorage.setItem('seafood_sheets_spreadsheet_id', id);
-    localStorage.setItem('seafood_sheets_spreadsheet_url', url);
+    const cleanId = extractSpreadsheetId(id);
+    const cleanUrl = url || (cleanId ? `https://docs.google.com/spreadsheets/d/${cleanId}/edit` : '');
+    setSpreadsheetId(cleanId);
+    setSpreadsheetUrl(cleanUrl);
+    localStorage.setItem('seafood_sheets_spreadsheet_id', cleanId);
+    localStorage.setItem('seafood_sheets_spreadsheet_url', cleanUrl);
   };
 
   const refreshData = () => {
@@ -436,7 +439,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // REVERSE SYNC / PULL from Google Sheets back into app
   const pullFromSheets = async (targetSpreadsheetId?: string): Promise<RestoreStats | null> => {
-    const activeSpreadsheetId = targetSpreadsheetId || spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    const rawId = targetSpreadsheetId || spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    const activeSpreadsheetId = extractSpreadsheetId(rawId);
     if (!activeSpreadsheetId) {
       addToast('error', 'Chưa có Google Sheets', 'Vui lòng liên kết tệp Google Sheets trước khi tải dữ liệu');
       return null;
@@ -483,7 +487,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // CLEAN SLATE PULL: Wipe local operational cache and pull fresh mirror from Google Sheets
   const cleanPullFromSheets = async (targetSpreadsheetId?: string): Promise<RestoreStats | null> => {
-    const activeSpreadsheetId = targetSpreadsheetId || spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    const rawId = targetSpreadsheetId || spreadsheetId || localStorage.getItem('seafood_sheets_spreadsheet_id') || '';
+    const activeSpreadsheetId = extractSpreadsheetId(rawId);
     if (!activeSpreadsheetId) {
       addToast('error', 'Chưa có Google Sheets', 'Vui lòng liên kết tệp Google Sheets trước khi xóa và tải dữ liệu');
       return null;

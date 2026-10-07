@@ -5,5 +5,6 @@ coverage/
 .DS_Store
 *.log
 .telegram_idempotency.json
+.github_token
 .env*
 !.env.example
