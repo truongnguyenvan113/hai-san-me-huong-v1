@@ -501,6 +501,111 @@ async function startServer() {
     }
   };
 
+  // Configuration file for Store Settings, Units, and Categories (persisted into Git repository)
+  const SETTINGS_CONFIG_PATH = path.join(process.cwd(), 'src', 'config', 'appSettings.json');
+
+  const readSettingsConfig = () => {
+    try {
+      if (fs.existsSync(SETTINGS_CONFIG_PATH)) {
+        const raw = fs.readFileSync(SETTINGS_CONFIG_PATH, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch (err) {
+      console.warn('[Settings Config] Read notice:', err);
+    }
+    return null;
+  };
+
+  const writeSettingsConfig = (data: { settings?: any; units?: string[]; categories?: string[] }) => {
+    try {
+      const existing = readSettingsConfig() || {};
+      const updated = {
+        settings: data.settings ? { ...(existing.settings || {}), ...data.settings } : (existing.settings || {}),
+        units: Array.isArray(data.units) && data.units.length > 0 ? data.units : (existing.units || []),
+        categories: Array.isArray(data.categories) && data.categories.length > 0 ? data.categories : (existing.categories || []),
+        lastUpdated: new Date().toISOString(),
+      };
+      const dir = path.dirname(SETTINGS_CONFIG_PATH);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(SETTINGS_CONFIG_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+      return updated;
+    } catch (err) {
+      console.error('[Settings Config] Write error:', err);
+      return null;
+    }
+  };
+
+  // API Route: Get Settings, Units, and Categories from Git config file
+  app.get('/api/settings', async (_req, res) => {
+    try {
+      const config = readSettingsConfig();
+      return res.json({
+        success: true,
+        config: config || {},
+      });
+    } catch (err: any) {
+      return res.json({
+        success: false,
+        error: err?.message || 'Không thể đọc cấu hình',
+      });
+    }
+  });
+
+  // API Route: Save Settings, Units, and Categories to config file (and optionally auto-push to Git)
+  app.post('/api/settings/save', async (req, res) => {
+    try {
+      const { settings, units, categories, pushToGit, message } = req.body || {};
+      const updated = writeSettingsConfig({ settings, units, categories });
+
+      if (pushToGit) {
+        await ensureGitRepo();
+        const tokenPath = path.join(process.cwd(), '.github_token');
+        let savedToken = '';
+        if (fs.existsSync(tokenPath)) {
+          try {
+            savedToken = fs.readFileSync(tokenPath, 'utf-8').trim();
+          } catch {}
+        }
+        const authToken = (process.env.GITHUB_TOKEN || savedToken || '').trim();
+        const repoName = 'truongnguyenvan113/hai-san-me-huong-v1';
+
+        if (authToken) {
+          const authedUrl = `https://${authToken}@github.com/${repoName}.git`;
+          try {
+            await execAsync(`git remote set-url origin "${authedUrl}"`);
+          } catch {
+            await execAsync(`git remote add origin "${authedUrl}"`);
+          }
+        }
+
+        try {
+          await execAsync('git add src/config/appSettings.json');
+          const commitMsg = message?.trim() || `feat(settings): cập nhật cấu hình cài đặt (ĐVT, Danh mục, Cửa hàng) lúc ${new Date().toLocaleString('vi-VN')}`;
+          await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
+          await execAsync('git push -u origin main');
+          try {
+            await execAsync('git push origin main:develop');
+          } catch {}
+        } catch (gitErr: any) {
+          console.warn('[Settings Push Notice]:', gitErr?.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: 'Đã lưu cấu hình cài đặt thành công vào tệp hệ thống!',
+        config: updated,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: err?.message || 'Lỗi lưu cấu hình',
+      });
+    }
+  });
+
   // API Route: Git status, Push, and Pull integration
   app.get('/api/git/status', async (_req, res) => {
     try {
@@ -560,9 +665,15 @@ async function startServer() {
   app.post('/api/git/push', async (req, res) => {
     try {
       await ensureGitRepo();
-      const { message, token } = req.body || {};
+      const { message, token, settings, units, categories } = req.body || {};
       const repoName = 'truongnguyenvan113/hai-san-me-huong-v1';
       
+      // Update persistent settings config file first if settings, units, or categories were provided
+      let savedConfig = null;
+      if (settings || units || categories) {
+        savedConfig = writeSettingsConfig({ settings, units, categories });
+      }
+
       const tokenPath = path.join(process.cwd(), '.github_token');
       let savedToken = '';
       if (fs.existsSync(tokenPath)) {
@@ -587,9 +698,10 @@ async function startServer() {
         // ignore
       }
 
-      // 1. Commit changes
-      const commitMsg = message?.trim() || `update: đồng bộ thay đổi từ web app lúc ${new Date().toLocaleString('vi-VN')}`;
+      // 1. Commit changes (always include appSettings.json)
+      const commitMsg = message?.trim() || `feat(settings): đồng bộ cấu hình cài đặt (ĐVT, Danh mục, Cửa hàng) lúc ${new Date().toLocaleString('vi-VN')}`;
       try {
+        await execAsync('git add src/config/appSettings.json');
         await execAsync('git add -A');
         await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
       } catch {
@@ -718,10 +830,12 @@ async function startServer() {
       }
 
       const { stdout } = await execAsync('git pull origin main');
+      const latestConfig = readSettingsConfig();
       return res.json({
         success: true,
         message: 'Đã kéo (pull) cập nhật mới nhất từ GitHub thành công!',
         output: stdout,
+        settingsConfig: latestConfig,
       });
     } catch (err: any) {
       const cleanErr = (err?.message || 'Lỗi không xác định')

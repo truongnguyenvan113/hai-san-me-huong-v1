@@ -161,6 +161,7 @@ interface AppContextType {
   // Actions
   updateSettings: (s: StoreSettings) => void;
   updateStoreSettings: (s: StoreSettings) => void;
+  pushSettingsToGit: (customMessage?: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   addProduct: (p: Product) => void;
   updateProduct: (p: Product) => void;
   deleteProduct: (productId: string) => void;
@@ -620,7 +621,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         clearTimeout(syncTimeoutRef.current);
       }
     };
-  }, [orders, batches, customers, products, payments, units, categories, autoSyncEnabled]);
+  }, [orders, batches, customers, products, payments, units, categories, settings, autoSyncEnabled]);
 
   const currentBatch = batches.find((b) => b.batch_id === (selectedBatchId || storage.getCurrentBatchId())) || batches[0] || null;
 
@@ -628,6 +629,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     storage.saveSettings(newSettings);
     setSettings(newSettings);
     addToast('success', 'Thành công', 'Đã lưu cấu hình cửa hàng');
+    // Persist to server config file (and Git-tracked appSettings.json)
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: newSettings,
+          units: storage.getUnits(),
+          categories: storage.getCategories(),
+        }),
+      }).catch(() => {});
+    } catch {}
+    executeAutoSync(true);
+  };
+
+  const pushSettingsToGit = async (customMessage?: string): Promise<{ success: boolean; message?: string; error?: string }> => {
+    try {
+      const token = localStorage.getItem('github_personal_access_token') || '';
+      const res = await fetch('/api/git/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: customMessage || `feat(settings): đồng bộ cấu hình cài đặt (ĐVT, Danh mục, Cửa hàng) lên Git lúc ${new Date().toLocaleString('vi-VN')}`,
+          token,
+          settings: storage.getSettings(),
+          units: storage.getUnits(),
+          categories: storage.getCategories(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        addToast('success', 'Đã đẩy cấu hình lên Git', 'Cài đặt cửa hàng, ĐVT và Danh mục hải sản đã lưu và đẩy lên GitHub thành công!');
+        return { success: true, message: data.message };
+      } else {
+        addToast('error', 'Lỗi đẩy Git', data.error || 'Không thể đẩy lên GitHub');
+        return { success: false, error: data.error };
+      }
+    } catch (err: any) {
+      addToast('error', 'Lỗi kết nối Git', err?.message || 'Không thể kết nối máy chủ Git');
+      return { success: false, error: err?.message };
+    }
   };
 
   const addProduct = (product: Product) => {
@@ -662,6 +704,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.addUnit(unitName);
     setUnits([...updated]);
     addToast('success', 'Đã thêm đơn vị tính', `Đơn vị mới: ${unitName}`);
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          units: updated,
+          categories: storage.getCategories(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -670,6 +723,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setUnits([...updated]);
     setProducts(storage.getProducts());
     addToast('success', 'Đã cập nhật đơn vị tính', `${oldUnit} -> ${newUnit}`);
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          units: updated,
+          categories: storage.getCategories(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -677,6 +741,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.deleteUnit(unitName);
     setUnits([...updated]);
     addToast('info', 'Đã xóa đơn vị tính', `Đã xóa: ${unitName}`);
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          units: updated,
+          categories: storage.getCategories(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -684,6 +759,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.resetUnits();
     setUnits([...updated]);
     addToast('info', 'Đã khôi phục đơn vị mặc định', 'Đã đặt lại danh sách ĐVT ban đầu');
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          units: updated,
+          categories: storage.getCategories(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -691,6 +777,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.addCategory(cat);
     setCategories([...updated]);
     addToast('success', 'Đã thêm danh mục mới', `Danh mục: ${cat.trim()}`);
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          categories: updated,
+          units: storage.getUnits(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -699,6 +796,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCategories([...updated]);
     setProducts(storage.getProducts());
     addToast('success', 'Đã cập nhật danh mục', `${oldCat} → ${newCat}`);
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          categories: updated,
+          units: storage.getUnits(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -706,6 +814,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.deleteCategory(catName);
     setCategories([...updated]);
     addToast('info', 'Đã xóa danh mục', `Đã xóa: ${catName}`);
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          categories: updated,
+          units: storage.getUnits(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -713,6 +832,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const updated = storage.resetCategories();
     setCategories([...updated]);
     addToast('info', 'Đã khôi phục danh mục mặc định', 'Đã đặt lại danh sách danh mục ban đầu');
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          categories: updated,
+          units: storage.getUnits(),
+          settings: storage.getSettings(),
+        }),
+      }).catch(() => {});
+    } catch {}
     executeAutoSync(true);
   };
 
@@ -1056,6 +1186,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         getCurrentBackupData,
         updateSettings,
         updateStoreSettings: updateSettings,
+        pushSettingsToGit,
         addProduct,
         updateProduct,
         deleteProduct,

@@ -13,7 +13,12 @@ import {
   KeyRound,
   Eye,
   EyeOff,
+  Layers,
+  Scale,
+  Store,
 } from 'lucide-react';
+import { storage } from '../../services/storage';
+import { useApp } from '../../context/AppContext';
 
 interface GitSyncModalProps {
   isOpen: boolean;
@@ -29,6 +34,7 @@ interface GitStatus {
 }
 
 export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) => {
+  const { refreshData, units, categories, storeSettings } = useApp();
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
@@ -86,19 +92,26 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
     setIsPushing(true);
     setFeedback(null);
     try {
+      const currentSettings = storage.getSettings();
+      const currentUnits = storage.getUnits();
+      const currentCategories = storage.getCategories();
+
       const res = await fetch('/api/git/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: commitMessage,
           token: tokenToUse,
+          settings: currentSettings,
+          units: currentUnits,
+          categories: currentCategories,
         }),
       });
       const data = await res.json();
       if (data.success) {
         setFeedback({
           type: 'success',
-          message: data.message || 'Đã đẩy (push) thành công toàn bộ mã nguồn lên GitHub!',
+          message: data.message || 'Đã đẩy (push) thành công mã nguồn và cấu hình Cài đặt lên GitHub!',
           details: data.output,
         });
         setCommitMessage('');
@@ -131,6 +144,10 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
       });
       const data = await res.json();
       if (data.success) {
+        if (data.settingsConfig) {
+          storage.importSettingsConfig(data.settingsConfig);
+          refreshData();
+        }
         setFeedback({
           type: 'success',
           message: data.message || 'Đã kéo (pull) cập nhật mới nhất từ GitHub thành công!',
@@ -225,6 +242,49 @@ export const GitSyncModal: React.FC<GitSyncModalProps> = ({ isOpen, onClose }) =
               <span className="font-mono text-slate-700 truncate">{status.lastCommit}</span>
             </div>
           )}
+        </div>
+
+        {/* Settings & Categories Sync Scope Notice */}
+        <div className="p-3.5 bg-teal-50/70 border border-teal-200/80 rounded-2xl space-y-2">
+          <div className="flex items-center justify-between text-xs font-black text-teal-950">
+            <span className="flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-teal-800" />
+              Cấu hình Cài đặt tự động đính kèm khi Push Git:
+            </span>
+            <span className="text-[11px] bg-teal-100/90 text-teal-900 px-2 py-0.5 rounded-md font-bold">
+              Chỉ hạng mục Cài Đặt
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+            <div className="bg-white/90 p-2 rounded-xl border border-teal-100 flex items-center gap-2">
+              <Scale className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+              <div>
+                <div className="font-bold text-slate-900">Đơn vị tính</div>
+                <div className="text-slate-500 text-[10px]">{units.length} ĐVT (Kg, Hộp, Lon...)</div>
+              </div>
+            </div>
+
+            <div className="bg-white/90 p-2 rounded-xl border border-teal-100 flex items-center gap-2">
+              <Layers className="w-3.5 h-3.5 text-indigo-700 shrink-0" />
+              <div>
+                <div className="font-bold text-slate-900">Danh mục hải sản</div>
+                <div className="text-slate-500 text-[10px]">{categories.length} danh mục (Tôm, Cua...)</div>
+              </div>
+            </div>
+
+            <div className="bg-white/90 p-2 rounded-xl border border-teal-100 flex items-center gap-2">
+              <Store className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+              <div>
+                <div className="font-bold text-slate-900 truncate">Cửa hàng & VietQR</div>
+                <div className="text-slate-500 text-[10px] truncate">{storeSettings.store_name || 'Hải Sản Mẹ Hường'}</div>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-[10px] text-teal-900/80 italic pt-0.5">
+            * Chỉ các hạng mục trong Cài đặt (ĐVT, Danh mục hải sản, Cấu hình cửa hàng) và mã nguồn được lưu và đẩy lên GitHub. Dữ liệu khách hàng & đơn hàng được lưu giữ an toàn riêng biệt.
+          </p>
         </div>
 
         {/* Feedback Alert */}

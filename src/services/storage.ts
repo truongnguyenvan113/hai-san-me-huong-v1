@@ -13,6 +13,7 @@ import {
   SnapshotTrigger,
   DiffComparisonResult
 } from '../types';
+import appSettingsConfig from '../config/appSettings.json';
 
 const STORAGE_KEYS = {
   CUSTOMERS: 'seafood_app_customers_v1',
@@ -29,41 +30,49 @@ const STORAGE_KEYS = {
   CATEGORIES: 'seafood_app_categories_v1',
 };
 
-export const DEFAULT_CATEGORIES: string[] = [
-  'Tôm',
-  'Cua',
-  'Ghẹ',
-  'Cá biển',
-  'Mực',
-  'Ốc & Ngao',
-  'Hàu & Sò',
-  'Chả cá & Đồ chế biến',
-  'Đồ khô & Một nắng',
-  'Gia vị & Khác',
-  'Khác',
-];
+export const DEFAULT_CATEGORIES: string[] = (
+  Array.isArray(appSettingsConfig?.categories) && appSettingsConfig.categories.length > 0
+    ? appSettingsConfig.categories
+    : [
+        'Tôm',
+        'Cua',
+        'Ghẹ',
+        'Cá biển',
+        'Mực',
+        'Ốc & Ngao',
+        'Hàu & Sò',
+        'Chả cá & Đồ chế biến',
+        'Đồ khô & Một nắng',
+        'Gia vị & Khác',
+        'Khác',
+      ]
+);
 
-export const DEFAULT_UNITS: string[] = [
-  'Kg',
-  'Hộp',
-  'Khay',
-  'Con',
-  'Chai',
-  'Lon',
-  'Bịch',
-  'Thùng',
-  'Túi',
-  'Gói',
-  'Gram',
-  'Phần',
-  'Combo',
-  'Rế',
-  'Xù',
-  'Vỉ',
-  'kg',
-];
+export const DEFAULT_UNITS: string[] = (
+  Array.isArray(appSettingsConfig?.units) && appSettingsConfig.units.length > 0
+    ? appSettingsConfig.units
+    : [
+        'Kg',
+        'Hộp',
+        'Khay',
+        'Con',
+        'Chai',
+        'Lon',
+        'Bịch',
+        'Thùng',
+        'Túi',
+        'Gói',
+        'Gram',
+        'Phần',
+        'Combo',
+        'Rế',
+        'Xù',
+        'Vỉ',
+        'kg',
+      ]
+);
 
-export const DEFAULT_SETTINGS: StoreSettings = {
+const BASE_DEFAULT_SETTINGS: StoreSettings = {
   store_name: 'Hải Sản Mẹ Hường',
   owner_name: 'Đặng Thị Vân (GSB-1004)',
   phone: '0916988982',
@@ -91,6 +100,11 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   slogan: 'Hải sản tươi ngon mỗi ngày - Gom tận gốc, giao tận cửa phòng',
   default_shipping_fee: 0,
   show_vietqr: true,
+};
+
+export const DEFAULT_SETTINGS: StoreSettings = {
+  ...BASE_DEFAULT_SETTINGS,
+  ...((appSettingsConfig?.settings as Partial<StoreSettings>) || {}),
 };
 
 export const INITIAL_PRODUCTS: Product[] = [
@@ -697,6 +711,30 @@ class StorageService {
   public resetCategories(): string[] {
     this.saveCategories(DEFAULT_CATEGORIES);
     return DEFAULT_CATEGORIES;
+  }
+
+  // Export current settings, units, and categories configuration (for Git and Server sync)
+  public exportSettingsConfig() {
+    return {
+      settings: this.getSettings(),
+      units: this.getUnits(),
+      categories: this.getCategories(),
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  // Import and apply settings, units, and categories configuration from Git or Server
+  public importSettingsConfig(config?: { settings?: Partial<StoreSettings>; units?: string[]; categories?: string[] }) {
+    if (!config) return;
+    if (config.settings) {
+      this.saveSettings({ ...this.getSettings(), ...config.settings });
+    }
+    if (Array.isArray(config.units) && config.units.length > 0) {
+      this.saveUnits(config.units);
+    }
+    if (Array.isArray(config.categories) && config.categories.length > 0) {
+      this.saveCategories(config.categories);
+    }
   }
 
   // Customers

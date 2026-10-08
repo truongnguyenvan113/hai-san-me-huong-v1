@@ -69,6 +69,7 @@ export const SettingsView: React.FC = () => {
     deleteCategory,
     resetCategoriesToDefault,
     setIsGitSyncOpen,
+    pushSettingsToGit,
     clearAllLocalData,
     repairAndHealLocalData,
     forceTwoWaySync,
@@ -87,6 +88,7 @@ export const SettingsView: React.FC = () => {
   const [isPullConfirmOpen, setIsPullConfirmOpen] = useState(false);
   const [isExportingSheets, setIsExportingSheets] = useState(false);
   const [isPullingSheets, setIsPullingSheets] = useState(false);
+  const [isPushingSettingsGit, setIsPushingSettingsGit] = useState(false);
   const [snapshotToRestore, setSnapshotToRestore] = useState<BackupSnapshot | null>(null);
   const [isQuickRestoreConfirmOpen, setIsQuickRestoreConfirmOpen] = useState(false);
 
@@ -141,6 +143,19 @@ export const SettingsView: React.FC = () => {
     e.preventDefault();
     updateStoreSettings(formData);
     addToast('success', 'Đã lưu cài đặt', 'Thông tin cửa hàng, 2 tài khoản ngân hàng và cấu hình VietQR đã cập nhật!');
+  };
+
+  const handleSaveAndPushGit = async () => {
+    updateStoreSettings(formData);
+    setIsPushingSettingsGit(true);
+    try {
+      const res = await pushSettingsToGit();
+      if (res.success) {
+        addToast('success', 'Đã lưu & Đẩy lên Git', 'Cấu hình Cài đặt (ĐVT, Danh mục, Cửa hàng) đã được đẩy lên GitHub thành công!');
+      }
+    } finally {
+      setIsPushingSettingsGit(false);
+    }
   };
 
   const handleExportSettingsToSheets = async () => {
@@ -559,21 +574,26 @@ export const SettingsView: React.FC = () => {
 
         {/* Section 4: Units Management (Kg, Hộp, Khay, Con, Chai...) */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-wrap gap-2">
             <div className="flex items-center gap-2 text-teal-900 font-black text-base">
               <Scale className="w-5 h-5 text-teal-800" /> Quản Lý Đơn Vị Tính (Kg, Hộp, Khay, Con, Chai, Lon, Bịch, Thùng...)
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm('Khôi phục danh sách đơn vị tính mặc định (kg, hộp, khay, con, chai...)?')) {
-                  resetUnitsToDefault();
-                }
-              }}
-              className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 font-medium cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" /> Khôi phục mặc định
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-full border border-emerald-200 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> Tự động lưu Git & Sheets
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm('Khôi phục danh sách đơn vị tính mặc định (kg, hộp, khay, con, chai...)?')) {
+                    resetUnitsToDefault();
+                  }
+                }}
+                className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 font-medium cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Khôi phục mặc định
+              </button>
+            </div>
           </div>
 
           <p className="text-xs text-slate-500">
@@ -801,15 +821,30 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
 
-        {/* Save button */}
-        <div className="flex justify-end">
-          <button
-            id="save-settings-btn"
-            type="submit"
-            className="flex items-center gap-2 px-6 py-3 bg-teal-800 hover:bg-teal-900 text-white font-bold text-sm rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-          >
-            <Save className="w-4 h-4" /> Lưu Cài Đặt Hệ Thống
-          </button>
+        {/* Save button & Git Push */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+          <div className="text-xs text-slate-500 flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-teal-700 shrink-0" />
+            <span>Chỉ các hạng mục trong Cài đặt (Thông tin shop, ĐVT, Danh mục hải sản) được đẩy lên Git.</span>
+          </div>
+          <div className="flex items-center gap-2 justify-end">
+            <button
+              id="save-settings-btn"
+              type="submit"
+              className="flex items-center gap-2 px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+            >
+              <Save className="w-4 h-4" /> Lưu Cài Đặt
+            </button>
+            <button
+              type="button"
+              disabled={isPushingSettingsGit}
+              onClick={handleSaveAndPushGit}
+              className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+            >
+              <GitBranch className="w-4 h-4" />
+              {isPushingSettingsGit ? 'Đang Đẩy Git...' : 'Lưu & Đẩy Lên Git'}
+            </button>
+          </div>
         </div>
       </form>
 

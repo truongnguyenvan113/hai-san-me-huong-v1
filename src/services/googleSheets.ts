@@ -1137,31 +1137,40 @@ export async function pullAndRestoreFromGoogleSheets(spreadsheetId: string): Pro
     storage.saveSettings(restoredSettings as StoreSettings);
     settingsRestored = true;
 
-    // Restore and merge Units from Google Sheets config
+    // Restore Units from Google Sheets config (Tab 7)
     if (configMap['UNITS_LIST']) {
       const unitsFromSheet = configMap['UNITS_LIST']
         .split(/[;,]/)
         .map((u) => u.trim())
         .filter(Boolean);
       if (unitsFromSheet.length > 0) {
-        const currentU = storage.getUnits();
-        const mergedU = Array.from(new Set([...currentU, ...unitsFromSheet]));
-        storage.saveUnits(mergedU);
+        storage.saveUnits(unitsFromSheet);
       }
     }
 
-    // Restore and merge Categories from Google Sheets config
+    // Restore Categories from Google Sheets config (Tab 7)
     if (configMap['CATEGORIES_LIST']) {
       const catsFromSheet = configMap['CATEGORIES_LIST']
         .split(/[;,]/)
         .map((c) => c.trim())
         .filter(Boolean);
       if (catsFromSheet.length > 0) {
-        const currentC = storage.getCategories();
-        const mergedC = Array.from(new Set([...currentC, ...catsFromSheet]));
-        storage.saveCategories(mergedC);
+        storage.saveCategories(catsFromSheet);
       }
     }
+
+    // Also persist restored settings, units, and categories to local server config file
+    try {
+      fetch('/api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          settings: restoredSettings,
+          units: storage.getUnits(),
+          categories: storage.getCategories(),
+        }),
+      }).catch(() => {});
+    } catch {}
   }
 
   // ----------------------------------------------------
